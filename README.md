@@ -2,9 +2,9 @@
 
 
 
-# 📊 Projeto [Nome do Projeto]
+# 📊 Projeto Perform
 
-Este repositório contém o código-fonte e arquivos relacionados ao projeto Perform, desenvolvido para análise de métricas técnicas de desenvolvedores e suporte à tomada de decisão de Tech Leads].
+Este repositório contém o código-fonte e arquivos relacionados ao projeto Perform, desenvolvido para análise de métricas técnicas de desenvolvedores e suporte à tomada de decisão de Tech Leads.
 
 ## 📄 Documentação Completa
 
