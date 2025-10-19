@@ -1,98 +1,247 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 📊 Perform API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend da aplicação **Perform** - Sistema de análise de métricas técnicas de desenvolvedores e suporte à tomada de decisão de Tech Leads.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 🎯 Sobre o Projeto
 
-## Description
+O Perform é uma plataforma que captura dados do GitHub via webhooks e os transforma em insights acionáveis para Tech Leads. A aplicação:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- 📈 Coleta métricas de PRs, commits e code reviews automaticamente
+- 🤖 Gera recomendações inteligentes com IA
+- 📊 Calcula métricas como lead time, cycle time e review time
+- 👥 Gerencia squads e acompanha performance individual
+- 🎮 Interface gamificada inspirada em dashboards de eSports
 
-## Project setup
+## 🚀 Tecnologias
 
-```bash
-$ npm install
-```
+- **[NestJS](https://nestjs.com/)** - Framework Node.js progressivo
+- **[TypeORM](https://typeorm.io/)** - ORM para TypeScript
+- **[PostgreSQL](https://www.postgresql.org/)** - Banco de dados (NeonDB)
+- **[JWT](https://jwt.io/)** - Autenticação
+- **[Class Validator](https://github.com/typestack/class-validator)** - Validação de DTOs
 
-## Compile and run the project
+## 📋 Pré-requisitos
+
+- Node.js 18+ 
+- npm ou yarn
+- PostgreSQL (ou acesso ao NeonDB)
+
+## 🔧 Instalação
 
 ```bash
-# development
-$ npm run start
+# Clone o repositório
+git clone <repo-url>
+cd perform-api
 
-# watch mode
-$ npm run start:dev
+# Instale as dependências
+npm install
 
-# production mode
-$ npm run start:prod
+# Configure as variáveis de ambiente
+cp .env.example .env
+# Edite o arquivo .env com suas credenciais
 ```
 
-## Run tests
+## ⚙️ Configuração
+
+Edite o arquivo `.env` com suas configurações:
+
+```env
+# Database
+DATABASE_URL=postgresql://user:password@host:5432/database
+
+# Application
+NODE_ENV=development
+PORT=3000
+
+# JWT
+JWT_SECRET=your-secret-key-here
+JWT_EXPIRATION=7d
+
+# GitHub Webhook
+GITHUB_WEBHOOK_SECRET=your-webhook-secret
+```
+
+## 🗄️ Banco de Dados
+
+### Migrations
 
 ```bash
-# unit tests
-$ npm run test
+# Gerar nova migration baseada nas mudanças das entities
+npm run migration:generate -- src/database/migrations/MigrationName
 
-# e2e tests
-$ npm run test:e2e
+# Executar migrations pendentes
+npm run migration:run
 
-# test coverage
-$ npm run test:cov
+# Reverter última migration
+npm run migration:revert
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## 🏃 Executando a Aplicação
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Desenvolvimento (com hot reload)
+npm run start:dev
+
+# Produção
+npm run build
+npm run start:prod
+
+# Debug
+npm run start:debug
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+A API estará disponível em `http://localhost:3000`
 
-## Resources
+## 🧪 Testes
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+# Testes unitários
+npm run test
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# Testes e2e
+npm run test:e2e
 
-## Support
+# Coverage
+npm run test:cov
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+## 📁 Estrutura do Projeto
 
-## Stay in touch
+```
+src/
+├── ai-recommendations/    # Recomendações de IA para developers
+├── auth/                  # Autenticação e autorização
+├── code-reviews/          # Gestão de code reviews
+├── commits/               # Gestão de commits
+├── database/              # Configuração do banco e migrations
+│   ├── data-source.ts    # DataSource do TypeORM
+│   └── migrations/       # Migrations SQL
+├── developers/            # Perfis técnicos dos developers
+├── github-webhook/        # Receptor de webhooks do GitHub
+├── metrics/               # Cálculo e armazenamento de métricas
+├── permissions/           # Sistema de permissões
+├── pull-requests/         # Gestão de Pull Requests
+├── reports/               # Geração de relatórios
+├── squads/                # Gestão de times/squads
+└── users/                 # Gestão de usuários do sistema
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## 📊 Entidades Principais
 
-## License
+### 👤 User
+Usuários do sistema com controle de acesso
+- Roles: `ADMIN`, `TECH_LEAD`, `DEVELOPER`
+- Autenticação JWT
+- Sistema de permissões granular
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+### 👥 Squad
+Times de desenvolvimento
+- Tech Lead associado
+- Membros (Users e Developers)
+- Métricas agregadas por squad
+
+### 💻 Developer
+Perfil técnico vinculado ao GitHub
+- Dados sincronizados via webhook
+- Histórico de PRs, commits e reviews
+- Métricas individuais calculadas
+
+### 🔀 PullRequest
+Pull requests capturados do GitHub
+- Status: `OPEN`, `CLOSED`, `MERGED`
+- Estatísticas: linhas adicionadas/removidas, arquivos alterados
+- Lead time e review time
+
+### 📝 Commit
+Commits individuais
+- Vinculados a Developer e PullRequest (opcional)
+- Dados de complexidade e impacto
+
+### 👀 CodeReview
+Reviews de código
+- Status: `PENDING`, `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`
+- Tempo de resposta e qualidade do review
+
+### 📈 Metric
+Métricas calculadas
+- Lead time, cycle time, review time
+- Produtividade, qualidade de código
+- Armazenadas por período
+
+### 🤖 AIRecommendation
+Recomendações geradas por IA
+- Categorias: produtividade, qualidade, colaboração, aprendizado
+- Prioridades e score de confiança
+
+## 🔌 Endpoints Principais
+
+### Autenticação
+```
+POST   /auth/login          # Login
+POST   /auth/register       # Registro
+```
+
+### Usuários
+```
+GET    /users               # Listar usuários
+GET    /users/:id           # Buscar usuário
+POST   /users               # Criar usuário
+PATCH  /users/:id           # Atualizar usuário
+DELETE /users/:id           # Deletar usuário
+```
+
+### Developers
+```
+GET    /developers                    # Listar developers
+GET    /developers/:id                # Buscar developer
+GET    /developers/:id/metrics        # Métricas do developer
+GET    /developers/:id/pull-requests  # PRs do developer
+```
+
+### GitHub Webhook
+```
+POST   /github-webhook      # Receber eventos do GitHub
+```
+
+### Métricas
+```
+GET    /metrics                      # Listar métricas
+GET    /metrics/developer/:id        # Métricas por developer
+GET    /metrics/squad/:id            # Métricas por squad
+```
+
+## 🪝 Configuração do GitHub Webhook
+
+1. Acesse as configurações do seu repositório no GitHub
+2. Vá em **Settings** → **Webhooks** → **Add webhook**
+3. Configure:
+   - **Payload URL**: `https://your-api.com/github-webhook`
+   - **Content type**: `application/json`
+   - **Secret**: (mesmo valor do `GITHUB_WEBHOOK_SECRET` no .env)
+   - **Events**: Selecione:
+     - `push` (commits)
+     - `pull_request` (PRs)
+     - `pull_request_review` (reviews)
+
+## 📚 Documentação
+
+- [NestJS Documentation](https://docs.nestjs.com/)
+- [TypeORM Documentation](https://typeorm.io/)
+- [GitHub Webhooks](https://docs.github.com/en/developers/webhooks-and-events/webhooks)
+- [NeonDB Documentation](https://neon.tech/docs)
+
+## 🤝 Contribuindo
+
+1. Fork o projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+## 👥 Autores
+
+- **Mateus Silva de Castro Fagundes** - Desenvolvimento inicial
+
+## 📝 Licença
+
+Este projeto é proprietário e confidencial.
