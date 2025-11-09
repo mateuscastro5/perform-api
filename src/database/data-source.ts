@@ -10,7 +10,7 @@ export const dataSourceOptions: DataSourceOptions = {
   migrations: ['dist/database/migrations/*.js'],
   synchronize: false,
   ssl: { rejectUnauthorized: false },
-  logging: process.env.NODE_ENV === 'development',
+  logging: false,
 };
 
 const dataSource = new DataSource(dataSourceOptions);

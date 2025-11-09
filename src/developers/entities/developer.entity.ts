@@ -3,6 +3,7 @@ import {
   Column,
   ManyToOne,
   OneToMany,
+  JoinColumn,
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
@@ -48,7 +49,11 @@ export class Developer {
   @Column({ default: true })
   active: boolean;
 
+  @Column({ name: 'squad_id', type: 'uuid', nullable: true })
+  squadId: string | null;
+
   @ManyToOne(() => Squad, (squad) => squad.developers, { nullable: true })
+  @JoinColumn({ name: 'squad_id' })
   squad: Squad;
 
   @OneToMany(() => PullRequest, (pr) => pr.author)
