@@ -28,9 +28,9 @@ export class GithubApiService {
       const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
       const rateLimitReset = response.headers.get('x-ratelimit-reset');
 
-      if (rateLimitRemaining && parseInt(rateLimitRemaining) < 10) {
+      if (rateLimitRemaining && parseInt(rateLimitRemaining) < 5) {
         this.logger.warn(
-          `Rate limit baixo: ${rateLimitRemaining} requisições restantes. Reset em ${new Date(parseInt(rateLimitReset!) * 1000).toISOString()}`,
+          `Critical rate limit: ${rateLimitRemaining} requests remaining. Reset at ${new Date(parseInt(rateLimitReset!) * 1000).toISOString()}`,
         );
       }
 
@@ -44,7 +44,9 @@ export class GithubApiService {
 
       return await response.json();
     } catch (error) {
-      this.logger.error(`Erro na requisição para ${url}:`, error);
+      if (!(error instanceof HttpException)) {
+        this.logger.error(`Request error for ${url}:`, error);
+      }
       throw error;
     }
   }
