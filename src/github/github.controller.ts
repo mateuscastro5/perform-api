@@ -145,4 +145,54 @@ export class GithubController {
       daysNum,
     );
   }
+
+  @Get('analytics/recent-activity')
+  async getRecentActivity(
+    @Request() req: any,
+    @Query('repositoryId') repositoryId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+    return this.githubAnalyticsService.getRecentActivity(
+      req.user.id,
+      repositoryId,
+      limitNum,
+    );
+  }
+
+  @Get('analytics/recent-pull-requests')
+  async getRecentPullRequests(
+    @Request() req: any,
+    @Query('repositoryId') repositoryId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const limitNum = limit ? parseInt(limit, 10) : 10;
+    return this.githubAnalyticsService.getRecentPullRequests(
+      req.user.id,
+      repositoryId,
+      limitNum,
+    );
+  }
+
+  @Get('analytics/top-reviewers')
+  async getTopReviewers(@Request() req: any, @Query('limit') limit?: string) {
+    const limitNum = limit ? parseInt(limit, 10) : 10;
+    return this.githubAnalyticsService.getTopReviewers(req.user.id, limitNum);
+  }
+
+  @Get('analytics/reviewer/:login/pull-requests')
+  async getReviewerPullRequests(
+    @Request() req: any,
+    @Param('login') login: string,
+  ) {
+    return this.githubAnalyticsService.getReviewerPullRequests(
+      req.user.id,
+      login,
+    );
+  }
+
+  @Get('analytics/developer-pr-status')
+  async getDeveloperPRStatus(@Request() req: any) {
+    return this.githubAnalyticsService.getDeveloperPRStatus(req.user.id);
+  }
 }

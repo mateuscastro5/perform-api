@@ -56,6 +56,9 @@ export class GithubDataCollectorService {
       try {
         await this.collectRepositoryData(config.githubToken, repo, since);
       } catch (error) {
+        if (error?.response === 'Git Repository is empty.') {
+          continue;
+        }
         this.logger.error(
           `Error collecting data from ${repo.repoFullName}:`,
           error,
@@ -126,6 +129,9 @@ export class GithubDataCollectorService {
         await this.githubCommitRepository.save(githubCommit);
       }
     } catch (error) {
+      if (error?.response === 'Git Repository is empty.') {
+        return;
+      }
       this.logger.error(`Error collecting commits:`, error);
       throw error;
     }
@@ -169,7 +175,7 @@ export class GithubDataCollectorService {
           existingPR.state = pr.state;
           existingPR.title = pr.title;
           existingPR.body = pr.body;
-          existingPR.updatedAt = new Date(pr.updated_at);
+          existingPR.prUpdatedAt = new Date(pr.updated_at);
           existingPR.closedAt = pr.closed_at ? new Date(pr.closed_at) : null;
           existingPR.mergedAt = pr.merged_at ? new Date(pr.merged_at) : null;
 
@@ -191,8 +197,8 @@ export class GithubDataCollectorService {
             state: pr.state,
             authorLogin: pr.user.login,
             authorEmail: null,
-            createdAt: new Date(pr.created_at),
-            updatedAt: new Date(pr.updated_at),
+            prCreatedAt: new Date(pr.created_at),
+            prUpdatedAt: new Date(pr.updated_at),
             closedAt: pr.closed_at ? new Date(pr.closed_at) : null,
             mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
             additions: prDetails.additions,
@@ -338,8 +344,6 @@ export class GithubDataCollectorService {
   }
 
   async forceCollectForUser(userId: string): Promise<void> {
-    this.logger.log(`Forçando coleta de dados para usuário ${userId}...`);
-
     const config = await this.githubConfigRepository.findOne({
       where: { userId, isActive: true },
       relations: ['repositories'],
@@ -347,11 +351,9 @@ export class GithubDataCollectorService {
     });
 
     if (!config) {
-      throw new Error('Configuração do GitHub não encontrada');
+      throw new Error('GitHub configuration not found');
     }
 
     await this.collectConfigurationData(config);
-
-    this.logger.log(`✅ Coleta forçada finalizada para usuário ${userId}`);
   }
 }

@@ -312,7 +312,6 @@ export class GithubService {
         },
       );
 
-      this.logger.log(`Webhook criado para ${repoFullName}: ${webhook.id}`);
       return webhook.id;
     } catch (error) {
       this.logger.error(`Erro ao criar webhook para ${repoFullName}:`, error);
@@ -334,8 +333,6 @@ export class GithubService {
         repo,
         parseInt(webhookId),
       );
-
-      this.logger.log(`Webhook ${webhookId} deleted from ${repoFullName}`);
     } catch (error) {
       this.logger.error(
         `Error deleting webhook ${webhookId} from ${repoFullName}:`,
