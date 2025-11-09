@@ -39,11 +39,11 @@ export class Developer {
   @Column({ name: 'github_username', unique: true })
   githubUsername: string;
 
-  @Column({ name: 'avatar_url', nullable: true })
-  avatarUrl: string;
+  @Column({ name: 'avatar_url', nullable: true, type: 'varchar' })
+  avatarUrl: string | null;
 
-  @Column({ name: 'profile_url', nullable: true })
-  profileUrl: string;
+  @Column({ name: 'profile_url', nullable: true, type: 'varchar' })
+  profileUrl: string | null;
 
   @Column({ default: true })
   active: boolean;
