@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { dataSourceOptions } from './database/data-source';
@@ -15,15 +16,17 @@ import { ReportsModule } from './reports/reports.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { AiRecommendationsModule } from './ai-recommendations/ai-recommendations.module';
 import { GithubWebhookModule } from './github-webhook/github-webhook.module';
+import { GithubModule } from './github/github.module';
 import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
-    // Config Module - carrega variáveis de ambiente
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
     }),
+
+    ScheduleModule.forRoot(),
 
     TypeOrmModule.forRoot(dataSourceOptions),
 
@@ -48,6 +51,8 @@ import { AuthModule } from './auth/auth.module';
     AiRecommendationsModule,
 
     GithubWebhookModule,
+
+    GithubModule,
 
     AuthModule,
   ],
