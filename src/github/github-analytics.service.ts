@@ -359,14 +359,29 @@ export class GithubAnalyticsService {
 
     const developers = await this.developerRepository
       .createQueryBuilder('dev')
-      .innerJoin(GithubCommit, 'commit', 'commit.developer_id = dev.id')
+      .leftJoin(GithubCommit, 'commit', 'commit.developer_id = dev.id')
+      .leftJoin(GithubPullRequest, 'pr', 'pr.developer_id = dev.id')
       .where('commit.repository_id IN (:...repoIds)', { repoIds })
+      .orWhere('pr.repository_id IN (:...repoIds)', { repoIds })
       .groupBy('dev.id')
       .getMany();
 
     const developersWithStats = await Promise.all(
       developers.map(async (dev) => {
         const stats = await this.getDeveloperStats(userId, dev.id, days);
+
+        const devRepos = await this.monitoredRepoRepository
+          .createQueryBuilder('repo')
+          .leftJoin(GithubCommit, 'commit', 'commit.repository_id = repo.id')
+          .leftJoin(GithubPullRequest, 'pr', 'pr.repository_id = repo.id')
+          .where('repo.id IN (:...repoIds)', { repoIds })
+          .andWhere(
+            '(commit.developer_id = :devId OR pr.developer_id = :devId)',
+            { devId: dev.id },
+          )
+          .groupBy('repo.id')
+          .getMany();
+
         return {
           id: dev.id,
           name: dev.name,
@@ -374,6 +389,11 @@ export class GithubAnalyticsService {
           email: dev.email,
           avatarUrl: dev.avatarUrl,
           stats,
+          repositories: devRepos.map((repo) => ({
+            id: repo.id,
+            name: repo.repoName,
+            fullName: repo.repoFullName,
+          })),
         };
       }),
     );
@@ -398,6 +418,462 @@ export class GithubAnalyticsService {
       fullName: repo.repoFullName,
       isActive: repo.isActive,
     }));
+  }
+
+  async getTopReviewers(userId: string, limit = 10) {
+    const repos = await this.monitoredRepoRepository.find({
+      where: {
+        configuration: { userId, isActive: true },
+        isActive: true,
+      },
+    });
+
+    if (repos.length === 0) {
+      return [];
+    }
+
+    const repoIds = repos.map((r) => r.id);
+
+    const prs = await this.githubPRRepository.find({
+      where: { repositoryId: In(repoIds) },
+      select: ['id'],
+    });
+
+    if (prs.length === 0) {
+      return [];
+    }
+
+    const prIds = prs.map((pr) => pr.id);
+
+    const reviewStats = await this.githubPRReviewRepository
+      .createQueryBuilder('review')
+      .select('review.reviewer_login', 'reviewerLogin')
+      .addSelect('COUNT(DISTINCT review.pull_request_id)', 'prsReviewed')
+      .addSelect('COUNT(*)', 'totalReviews')
+      .addSelect(
+        "SUM(CASE WHEN review.state = 'APPROVED' THEN 1 ELSE 0 END)",
+        'approved',
+      )
+      .addSelect(
+        "SUM(CASE WHEN review.state = 'CHANGES_REQUESTED' THEN 1 ELSE 0 END)",
+        'changesRequested',
+      )
+      .addSelect(
+        "SUM(CASE WHEN review.state = 'COMMENTED' THEN 1 ELSE 0 END)",
+        'commented',
+      )
+      .leftJoin('review.developer', 'developer')
+      .addSelect('developer.id', 'developerId')
+      .addSelect('developer.name', 'developerName')
+      .addSelect('developer.avatar_url', 'avatarUrl')
+      .where('review.pull_request_id IN (:...prIds)', { prIds })
+      .groupBy('review.reviewer_login')
+      .addGroupBy('developer.id')
+      .addGroupBy('developer.name')
+      .addGroupBy('developer.avatar_url')
+      .orderBy('"prsReviewed"', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    return reviewStats.map((stat: any) => ({
+      reviewer: {
+        id: stat.developerId || null,
+        name: stat.developerName || stat.reviewerLogin,
+        login: stat.reviewerLogin,
+        avatar:
+          stat.avatarUrl ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(stat.reviewerLogin)}&background=random`,
+      },
+      stats: {
+        prsReviewed: parseInt(stat.prsReviewed),
+        totalReviews: parseInt(stat.totalReviews),
+        approved: parseInt(stat.approved),
+        changesRequested: parseInt(stat.changesRequested),
+        commented: parseInt(stat.commented),
+      },
+    }));
+  }
+
+  async getReviewerPullRequests(userId: string, reviewerLogin: string) {
+    const repos = await this.monitoredRepoRepository.find({
+      where: {
+        configuration: { userId, isActive: true },
+        isActive: true,
+      },
+    });
+
+    if (repos.length === 0) {
+      return { approved: [], changesRequested: [], commented: [], pending: [] };
+    }
+
+    const repoIds = repos.map((r) => r.id);
+
+    const reviews = await this.githubPRReviewRepository
+      .createQueryBuilder('review')
+      .leftJoinAndSelect('review.pullRequest', 'pr')
+      .leftJoinAndSelect('pr.developer', 'developer')
+      .where('pr.repository_id IN (:...repoIds)', { repoIds })
+      .andWhere('review.reviewer_login = :reviewerLogin', { reviewerLogin })
+      .orderBy('review.submittedAt', 'DESC')
+      .getMany();
+
+    const prReviewsMap = new Map<string, any>();
+    reviews.forEach((review) => {
+      const prId = review.pullRequestId;
+      if (
+        !prReviewsMap.has(prId) ||
+        new Date(review.submittedAt) >
+          new Date(prReviewsMap.get(prId)!.submittedAt)
+      ) {
+        prReviewsMap.set(prId, review);
+      }
+    });
+
+    const categorized = {
+      approved: [] as any[],
+      changesRequested: [] as any[],
+      commented: [] as any[],
+      pending: [] as any[],
+    };
+
+    prReviewsMap.forEach((review) => {
+      const pr = review.pullRequest;
+      const prData = {
+        id: pr.id,
+        title: pr.title,
+        number: pr.prNumber,
+        state: pr.state,
+        author: {
+          id: pr.developer?.id || null,
+          name: pr.developer?.name || pr.authorLogin,
+          avatar:
+            pr.developer?.avatarUrl ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(pr.authorLogin)}&background=random`,
+          login: pr.authorLogin,
+        },
+        createdAt: pr.prCreatedAt.toISOString(),
+        updatedAt: pr.prUpdatedAt.toISOString(),
+        closedAt: pr.closedAt?.toISOString() || null,
+        mergedAt: pr.mergedAt?.toISOString() || null,
+        url: pr.htmlUrl,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changedFiles: pr.changedFiles,
+        reviewState: review.state,
+        reviewedAt: review.submittedAt.toISOString(),
+        status: pr.mergedAt
+          ? 'merged'
+          : pr.state === 'closed'
+            ? 'closed'
+            : 'open',
+      };
+
+      switch (review.state) {
+        case 'APPROVED':
+          categorized.approved.push(prData);
+          break;
+        case 'CHANGES_REQUESTED':
+          categorized.changesRequested.push(prData);
+          break;
+        case 'COMMENTED':
+          categorized.commented.push(prData);
+          break;
+        default:
+          categorized.pending.push(prData);
+      }
+    });
+
+    return categorized;
+  }
+
+  async getDeveloperPRStatus(userId: string) {
+    const repos = await this.monitoredRepoRepository.find({
+      where: {
+        configuration: { userId, isActive: true },
+        isActive: true,
+      },
+    });
+
+    if (repos.length === 0) {
+      return [];
+    }
+
+    const repoIds = repos.map((r) => r.id);
+
+    const prStats = await this.githubPRRepository
+      .createQueryBuilder('pr')
+      .select('pr.developer_id', 'developerId')
+      .addSelect('COUNT(*)', 'totalPRs')
+      .addSelect(
+        "SUM(CASE WHEN pr.state = 'open' THEN 1 ELSE 0 END)",
+        'openPRs',
+      )
+      .addSelect(
+        'SUM(CASE WHEN pr.merged_at IS NOT NULL THEN 1 ELSE 0 END)',
+        'mergedPRs',
+      )
+      .addSelect(
+        "SUM(CASE WHEN pr.state = 'closed' AND pr.merged_at IS NULL THEN 1 ELSE 0 END)",
+        'closedPRs',
+      )
+      .leftJoin('pr.developer', 'developer')
+      .addSelect('developer.name', 'developerName')
+      .addSelect('developer.github_username', 'githubUsername')
+      .addSelect('developer.avatar_url', 'avatarUrl')
+      .leftJoin('developer.squad', 'squad')
+      .addSelect('squad.id', 'squadId')
+      .addSelect('squad.name', 'squadName')
+      .where('pr.repository_id IN (:...repoIds)', { repoIds })
+      .andWhere('pr.developer_id IS NOT NULL')
+      .groupBy('pr.developer_id')
+      .addGroupBy('developer.name')
+      .addGroupBy('developer.github_username')
+      .addGroupBy('developer.avatar_url')
+      .addGroupBy('squad.id')
+      .addGroupBy('squad.name')
+      .getRawMany();
+
+    return prStats.map((stat: any) => ({
+      developer: {
+        id: stat.developerId,
+        name: stat.developerName,
+        githubUsername: stat.githubUsername,
+        avatar:
+          stat.avatarUrl ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(stat.developerName || stat.githubUsername)}&background=random`,
+        squad: stat.squadName
+          ? {
+              id: stat.squadId,
+              name: stat.squadName,
+            }
+          : null,
+      },
+      prStatus: {
+        total: parseInt(stat.totalPRs),
+        open: parseInt(stat.openPRs),
+        merged: parseInt(stat.mergedPRs),
+        closed: parseInt(stat.closedPRs),
+      },
+    }));
+  }
+
+  async getRecentActivity(userId: string, repositoryId?: string, limit = 20) {
+    let repos = await this.monitoredRepoRepository.find({
+      where: {
+        configuration: { userId, isActive: true },
+        isActive: true,
+      },
+    });
+
+    if (repositoryId) {
+      repos = repos.filter((r) => r.id === repositoryId);
+    }
+
+    if (repos.length === 0) {
+      return [];
+    }
+
+    const repoIds = repos.map((r) => r.id);
+
+    const recentCommits = await this.githubCommitRepository.find({
+      where: {
+        repositoryId: In(repoIds),
+      },
+      relations: ['developer'],
+      order: {
+        committedDate: 'DESC',
+      },
+      take: limit,
+    });
+
+    const recentPRs = await this.githubPRRepository.find({
+      where: {
+        repositoryId: In(repoIds),
+      },
+      relations: ['developer'],
+      order: {
+        prUpdatedAt: 'DESC',
+      },
+      take: limit,
+    });
+
+    const recentReviews = await this.githubPRReviewRepository.find({
+      where: {
+        pullRequest: {
+          repositoryId: In(repoIds),
+        },
+      },
+      relations: ['developer', 'pullRequest'],
+      order: {
+        submittedAt: 'DESC',
+      },
+      take: limit,
+    });
+
+    const activities = [
+      ...recentCommits.map((commit) => ({
+        id: `commit-${commit.id}`,
+        type: 'commit' as const,
+        developer: commit.developer
+          ? {
+              id: commit.developer.id,
+              name: commit.developer.name,
+              githubUsername: commit.developer.githubUsername,
+              avatarUrl: commit.developer.avatarUrl,
+            }
+          : {
+              id: null,
+              name: commit.authorName,
+              githubUsername: null,
+              avatarUrl: null,
+            },
+        message: commit.message.split('\n')[0],
+        timestamp: commit.committedDate,
+        url: commit.htmlUrl,
+      })),
+      ...recentPRs.map((pr) => ({
+        id: `pr-${pr.id}`,
+        type: 'pull_request' as const,
+        developer: pr.developer
+          ? {
+              id: pr.developer.id,
+              name: pr.developer.name,
+              githubUsername: pr.developer.githubUsername,
+              avatarUrl: pr.developer.avatarUrl,
+            }
+          : {
+              id: null,
+              name: pr.authorLogin,
+              githubUsername: pr.authorLogin,
+              avatarUrl: null,
+            },
+        message: pr.title,
+        state: pr.state,
+        timestamp: pr.prUpdatedAt,
+        url: pr.htmlUrl,
+      })),
+      ...recentReviews.map((review) => ({
+        id: `review-${review.id}`,
+        type: 'review' as const,
+        developer: review.developer
+          ? {
+              id: review.developer.id,
+              name: review.developer.name,
+              githubUsername: review.developer.githubUsername,
+              avatarUrl: review.developer.avatarUrl,
+            }
+          : {
+              id: null,
+              name: review.reviewerLogin,
+              githubUsername: review.reviewerLogin,
+              avatarUrl: null,
+            },
+        message: `Reviewed PR: ${review.pullRequest?.title || 'Unknown'}`,
+        reviewState: review.state,
+        timestamp: review.submittedAt,
+        url: review.htmlUrl,
+      })),
+    ];
+
+    activities.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+
+    return activities.slice(0, limit);
+  }
+
+  async getRecentPullRequests(
+    userId: string,
+    repositoryId?: string,
+    limit = 10,
+  ) {
+    let repos = await this.monitoredRepoRepository.find({
+      where: {
+        configuration: { userId, isActive: true },
+        isActive: true,
+      },
+    });
+
+    if (repositoryId) {
+      repos = repos.filter((r) => r.id === repositoryId);
+    }
+
+    if (repos.length === 0) {
+      return [];
+    }
+
+    const repoIds = repos.map((r) => r.id);
+
+    const prs = await this.githubPRRepository
+      .createQueryBuilder('pr')
+      .leftJoinAndSelect('pr.developer', 'developer')
+      .where('pr.repository_id IN (:...repoIds)', { repoIds })
+      .orderBy('pr.prUpdatedAt', 'DESC')
+      .take(limit)
+      .getMany();
+
+    const prIds = prs.map((pr) => pr.id);
+    const reviews =
+      prIds.length > 0
+        ? await this.githubPRReviewRepository
+            .createQueryBuilder('review')
+            .leftJoinAndSelect('review.developer', 'developer')
+            .where('review.pull_request_id IN (:...prIds)', { prIds })
+            .orderBy('review.submittedAt', 'DESC')
+            .getMany()
+        : [];
+
+    return prs.map((pr) => {
+      const prReviews = reviews.filter((r) => r.pullRequestId === pr.id);
+      const uniqueReviewers = new Map();
+
+      prReviews.forEach((review) => {
+        if (!uniqueReviewers.has(review.reviewerLogin)) {
+          uniqueReviewers.set(review.reviewerLogin, {
+            id: review.developer?.id || null,
+            name: review.developer?.name || review.reviewerLogin,
+            avatar:
+              review.developer?.avatarUrl ||
+              `https://ui-avatars.com/api/?name=${encodeURIComponent(review.reviewerLogin)}&background=random`,
+            login: review.reviewerLogin,
+            state: review.state,
+            submittedAt: review.submittedAt.toISOString(),
+          });
+        }
+      });
+
+      return {
+        id: pr.id,
+        title: pr.title,
+        number: pr.prNumber,
+        state: pr.state,
+        author: {
+          id: pr.developer?.id || null,
+          name: pr.developer?.name || pr.authorLogin,
+          avatar:
+            pr.developer?.avatarUrl ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(pr.authorLogin)}&background=random`,
+          login: pr.authorLogin,
+        },
+        createdAt: pr.prCreatedAt.toISOString(),
+        updatedAt: pr.prUpdatedAt.toISOString(),
+        closedAt: pr.closedAt?.toISOString() || null,
+        mergedAt: pr.mergedAt?.toISOString() || null,
+        url: pr.htmlUrl,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changedFiles: pr.changedFiles,
+        commentsCount: pr.commentsCount,
+        reviewers: Array.from(uniqueReviewers.values()),
+        reviewsCount: prReviews.length,
+        status: pr.mergedAt
+          ? 'merged'
+          : pr.state === 'closed'
+            ? 'closed'
+            : 'open',
+      };
+    });
   }
 
   private getEmptyStats() {
