@@ -1,26 +1,43 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { CreateDeveloperDto } from './dto/create-developer.dto';
 import { UpdateDeveloperDto } from './dto/update-developer.dto';
+import { Developer } from './entities/developer.entity';
 
 @Injectable()
 export class DevelopersService {
+  constructor(
+    @InjectRepository(Developer)
+    private readonly developerRepository: Repository<Developer>,
+  ) {}
+
   create(createDeveloperDto: CreateDeveloperDto) {
-    return 'This action adds a new developer';
+    return this.developerRepository.save(createDeveloperDto);
   }
 
   findAll() {
-    return `This action returns all developers`;
+    return this.developerRepository.find();
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} developer`;
+  findOne(id: string) {
+    return this.developerRepository.findOne({ where: { id } });
   }
 
-  update(id: number, updateDeveloperDto: UpdateDeveloperDto) {
-    return `This action updates a #${id} developer`;
+  async update(id: string, updateDeveloperDto: UpdateDeveloperDto) {
+    const developer = await this.developerRepository.preload({
+      id,
+      ...updateDeveloperDto,
+    });
+
+    if (!developer) {
+      throw new NotFoundException(`Developer #${id} not found`);
+    }
+
+    return this.developerRepository.save(developer);
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} developer`;
+  remove(id: string) {
+    return this.developerRepository.softDelete(id);
   }
 }

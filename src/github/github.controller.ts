@@ -70,10 +70,13 @@ export class GithubController {
   @Post('collect-data')
   @HttpCode(HttpStatus.OK)
   async collectData(@Request() req: any) {
-    await this.githubDataCollectorService.forceCollectForUser(req.user.id);
+    const summary = await this.githubDataCollectorService.forceCollectForUser(
+      req.user.id,
+    );
     return {
       success: true,
-      message: 'Data collection started successfully',
+      message: 'Data collection completed successfully',
+      summary,
     };
   }
 

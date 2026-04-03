@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { RegisterDto, LoginDto } from './dto/create-auth.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -13,7 +14,11 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const user = await this.usersService.create(registerDto);
+    const user = await this.usersService.create({
+      ...registerDto,
+      email: registerDto.email.trim().toLowerCase(),
+      name: registerDto.name.trim(),
+    });
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...result } = user;
@@ -26,7 +31,10 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto) {
-    const user = await this.validateUser(loginDto.email, loginDto.password);
+    const user = await this.validateUser(
+      loginDto.email.trim().toLowerCase(),
+      loginDto.password,
+    );
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
@@ -56,5 +64,9 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  async updateProfile(userId: string, profileDto: UpdateProfileDto): Promise<User> {
+    return this.usersService.updateProfile(userId, profileDto);
   }
 }

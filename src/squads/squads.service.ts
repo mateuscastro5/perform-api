@@ -18,7 +18,7 @@ export class SquadsService {
 
   findAll() {
     return this.squadsRepository.find({
-      relations: ['members', 'techLead'],
+      relations: ['members', 'techLead', 'developers'],
       where: { active: true },
     });
   }

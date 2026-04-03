@@ -48,11 +48,11 @@ export class User {
   })
   role: UserRole;
 
-  @Column({ name: 'github_username', nullable: true })
-  githubUsername: string;
+  @Column({ type: 'varchar', name: 'github_username', nullable: true })
+  githubUsername: string | null;
 
-  @Column({ name: 'avatar_url', nullable: true })
-  avatarUrl: string;
+  @Column({ type: 'varchar', name: 'avatar_url', nullable: true })
+  avatarUrl: string | null;
 
   @Column({ default: true })
   active: boolean;

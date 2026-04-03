@@ -10,6 +10,22 @@ import { GithubPullRequest } from './entities/github-pull-request.entity';
 import { GithubPRReview } from './entities/github-pr-review.entity';
 import { Developer } from '../developers/entities/developer.entity';
 
+type RepositoryCollectionSummary = {
+  commitsNew: number;
+  prsCreated: number;
+  prsUpdated: number;
+  reviewsNew: number;
+};
+
+export type DataCollectionSummary = RepositoryCollectionSummary & {
+  repositoriesTotal: number;
+  repositoriesProcessed: number;
+  errors: number;
+  since: string;
+  dataRangeMonths: number;
+  durationMs: number;
+};
+
 @Injectable()
 export class GithubDataCollectorService {
   private readonly logger = new Logger(GithubDataCollectorService.name);
@@ -47,15 +63,40 @@ export class GithubDataCollectorService {
     }
   }
 
-  async collectConfigurationData(config: GithubConfiguration): Promise<void> {
+  async collectConfigurationData(
+    config: GithubConfiguration,
+  ): Promise<Omit<DataCollectionSummary, 'durationMs'>> {
     const since = this.calculateSinceDate(config.dataRange);
+    const summary: Omit<DataCollectionSummary, 'durationMs'> = {
+      repositoriesTotal: 0,
+      repositoriesProcessed: 0,
+      commitsNew: 0,
+      prsCreated: 0,
+      prsUpdated: 0,
+      reviewsNew: 0,
+      errors: 0,
+      since,
+      dataRangeMonths: config.dataRange,
+    };
 
     for (const repo of config.repositories) {
       if (!repo.isActive) continue;
 
+       summary.repositoriesTotal += 1;
+
       try {
-        await this.collectRepositoryData(config.githubToken, repo, since);
+        const repoSummary = await this.collectRepositoryData(
+          config.githubToken,
+          repo,
+          since,
+        );
+        summary.repositoriesProcessed += 1;
+        summary.commitsNew += repoSummary.commitsNew;
+        summary.prsCreated += repoSummary.prsCreated;
+        summary.prsUpdated += repoSummary.prsUpdated;
+        summary.reviewsNew += repoSummary.reviewsNew;
       } catch (error) {
+        summary.errors += 1;
         if (error?.response === 'Git Repository is empty.') {
           continue;
         }
@@ -65,17 +106,38 @@ export class GithubDataCollectorService {
         );
       }
     }
+
+    return summary;
   }
 
   private async collectRepositoryData(
     token: string,
     repo: MonitoredRepository,
     since: string,
-  ): Promise<void> {
+  ): Promise<RepositoryCollectionSummary> {
     const [owner, repoName] = repo.repoFullName.split('/');
 
-    await this.collectCommits(token, owner, repoName, repo.id, since);
-    await this.collectPullRequests(token, owner, repoName, repo.id, since);
+    const commitsNew = await this.collectCommits(
+      token,
+      owner,
+      repoName,
+      repo.id,
+      since,
+    );
+    const pullRequestSummary = await this.collectPullRequests(
+      token,
+      owner,
+      repoName,
+      repo.id,
+      since,
+    );
+
+    return {
+      commitsNew,
+      prsCreated: pullRequestSummary.prsCreated,
+      prsUpdated: pullRequestSummary.prsUpdated,
+      reviewsNew: pullRequestSummary.reviewsNew,
+    };
   }
 
   private async collectCommits(
@@ -84,7 +146,9 @@ export class GithubDataCollectorService {
     repo: string,
     repositoryId: string,
     since: string,
-  ): Promise<void> {
+  ): Promise<number> {
+    let insertedCommits = 0;
+
     try {
       const commits = await this.githubApiService.listCommits(
         token,
@@ -127,10 +191,13 @@ export class GithubDataCollectorService {
         });
 
         await this.githubCommitRepository.save(githubCommit);
+        insertedCommits += 1;
       }
+
+      return insertedCommits;
     } catch (error) {
       if (error?.response === 'Git Repository is empty.') {
-        return;
+        return insertedCommits;
       }
       this.logger.error(`Error collecting commits:`, error);
       throw error;
@@ -143,7 +210,11 @@ export class GithubDataCollectorService {
     repo: string,
     repositoryId: string,
     since: string,
-  ): Promise<void> {
+  ): Promise<{ prsCreated: number; prsUpdated: number; reviewsNew: number }> {
+    let prsCreated = 0;
+    let prsUpdated = 0;
+    let reviewsNew = 0;
+
     try {
       const prs = await this.githubApiService.listPullRequests(
         token,
@@ -157,9 +228,11 @@ export class GithubDataCollectorService {
         },
       );
 
-      const filteredPRs = prs.filter(
-        (pr) => new Date(pr.created_at) >= new Date(since),
-      );
+      const sinceDate = new Date(since);
+      const filteredPRs = prs.filter((pr) => {
+        const referenceDate = pr.updated_at ?? pr.created_at;
+        return new Date(referenceDate) >= sinceDate;
+      });
 
       for (const pr of filteredPRs) {
         let existingPR = await this.githubPRRepository.findOne({
@@ -180,6 +253,7 @@ export class GithubDataCollectorService {
           existingPR.mergedAt = pr.merged_at ? new Date(pr.merged_at) : null;
 
           await this.githubPRRepository.save(existingPR);
+          prsUpdated += 1;
         } else {
           const prDetails = await this.githubApiService.getPullRequest(
             token,
@@ -213,9 +287,10 @@ export class GithubDataCollectorService {
           });
 
           existingPR = await this.githubPRRepository.save(githubPR);
+          prsCreated += 1;
         }
 
-        await this.collectPRReviews(
+        reviewsNew += await this.collectPRReviews(
           token,
           owner,
           repo,
@@ -223,6 +298,8 @@ export class GithubDataCollectorService {
           existingPR.id,
         );
       }
+
+      return { prsCreated, prsUpdated, reviewsNew };
     } catch (error) {
       this.logger.error(`Error collecting PRs:`, error);
       throw error;
@@ -235,7 +312,9 @@ export class GithubDataCollectorService {
     repo: string,
     prNumber: number,
     pullRequestId: string,
-  ): Promise<void> {
+  ): Promise<number> {
+    let insertedReviews = 0;
+
     try {
       const reviews = await this.githubApiService.listPullRequestReviews(
         token,
@@ -271,9 +350,13 @@ export class GithubDataCollectorService {
         });
 
         await this.githubPRReviewRepository.save(githubReview);
+        insertedReviews += 1;
       }
+
+      return insertedReviews;
     } catch (error) {
       this.logger.error(`Error collecting reviews for PR #${prNumber}:`, error);
+      return insertedReviews;
     }
   }
 
@@ -343,7 +426,9 @@ export class GithubDataCollectorService {
     return date.toISOString();
   }
 
-  async forceCollectForUser(userId: string): Promise<void> {
+  async forceCollectForUser(userId: string): Promise<DataCollectionSummary> {
+    const startedAt = Date.now();
+
     const config = await this.githubConfigRepository.findOne({
       where: { userId, isActive: true },
       relations: ['repositories'],
@@ -354,6 +439,11 @@ export class GithubDataCollectorService {
       throw new Error('GitHub configuration not found');
     }
 
-    await this.collectConfigurationData(config);
+    const summary = await this.collectConfigurationData(config);
+
+    return {
+      ...summary,
+      durationMs: Date.now() - startedAt,
+    };
   }
 }

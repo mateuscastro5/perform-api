@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from '../auth/dto/update-profile.dto';
 
 @Injectable()
 export class UsersService {
@@ -18,8 +20,10 @@ export class UsersService {
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
+    const normalizedEmail = createUserDto.email.trim().toLowerCase();
+
     const existingUser = await this.usersRepository.findOne({
-      where: { email: createUserDto.email },
+      where: { email: normalizedEmail },
     });
 
     if (existingUser) {
@@ -30,6 +34,7 @@ export class UsersService {
 
     const user = this.usersRepository.create({
       ...createUserDto,
+      email: normalizedEmail,
       password: hashedPassword,
     });
 
@@ -56,18 +61,13 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return this.usersRepository.findOne({
-      where: { email },
-      select: [
-        'id',
-        'email',
-        'name',
-        'password',
-        'role',
-        'createdAt',
-        'updatedAt',
-      ],
-    });
+    const normalizedEmail = email.trim().toLowerCase();
+
+    return this.usersRepository
+      .createQueryBuilder('user')
+      .addSelect('user.password')
+      .where('LOWER(user.email) = :email', { email: normalizedEmail })
+      .getOne();
   }
 
   async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
@@ -84,5 +84,55 @@ export class UsersService {
   async remove(id: string): Promise<void> {
     const user = await this.findOne(id);
     await this.usersRepository.softRemove(user);
+  }
+
+  async updateProfile(userId: string, profileDto: UpdateProfileDto): Promise<User> {
+    const user = await this.findOne(userId);
+
+    if (profileDto.email && profileDto.email !== user.email) {
+      const existingUser = await this.usersRepository.findOne({
+        where: { email: profileDto.email },
+      });
+
+      if (existingUser && existingUser.id !== userId) {
+        throw new ConflictException('Email already exists');
+      }
+    }
+
+    if (profileDto.avatarUrl !== undefined) {
+      const trimmedAvatar = profileDto.avatarUrl.trim();
+
+      if (!trimmedAvatar) {
+        user.avatarUrl = null;
+      } else {
+        const isDataImage = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(trimmedAvatar);
+        const isHttpImage = /^https?:\/\//i.test(trimmedAvatar);
+
+        if (!isDataImage && !isHttpImage) {
+          throw new BadRequestException('Invalid avatar format. Use an image data URL or HTTP URL');
+        }
+
+        if (trimmedAvatar.length > 7_000_000) {
+          throw new BadRequestException('Avatar image is too large');
+        }
+
+        user.avatarUrl = trimmedAvatar;
+      }
+    }
+
+    if (profileDto.name !== undefined) {
+      user.name = profileDto.name.trim();
+    }
+
+    if (profileDto.email !== undefined) {
+      user.email = profileDto.email.trim().toLowerCase();
+    }
+
+    if (profileDto.githubUsername !== undefined) {
+      const normalizedGithubUsername = profileDto.githubUsername.trim();
+      user.githubUsername = normalizedGithubUsername || null;
+    }
+
+    return this.usersRepository.save(user);
   }
 }
