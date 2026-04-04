@@ -67,6 +67,18 @@ export class GithubController {
     return this.githubService.disconnect(req.user.id);
   }
 
+  @Post('cleanup-developers')
+  @HttpCode(HttpStatus.OK)
+  async cleanupDevelopers() {
+    const result =
+      await this.githubDataCollectorService.mergeAndCleanupDevelopers();
+    return {
+      success: true,
+      message: `Merged ${result.merged} duplicates, deleted ${result.deleted} seed records`,
+      ...result,
+    };
+  }
+
   @Post('collect-data')
   @HttpCode(HttpStatus.OK)
   async collectData(@Request() req: any) {
