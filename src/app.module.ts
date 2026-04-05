@@ -17,6 +17,7 @@ import { AiRecommendationsModule } from './ai-recommendations/ai-recommendations
 import { GithubWebhookModule } from './github-webhook/github-webhook.module';
 import { GithubModule } from './github/github.module';
 import { AuthModule } from './auth/auth.module';
+import { AiAnalysisModule } from './ai-analysis/ai-analysis.module';
 
 import { User } from './users/entities/user.entity';
 import { Squad } from './squads/entities/squad.entity';
@@ -34,6 +35,7 @@ import { GithubPullRequest } from './github/entities/github-pull-request.entity'
 import { GithubPRReview } from './github/entities/github-pr-review.entity';
 import { GithubConfiguration } from './github/entities/github-configuration.entity';
 import { GithubCommit } from './github/entities/github-commit.entity';
+import { PrAnalysis } from './ai-analysis/entities/pr-analysis.entity';
 
 const entities = [
   User,
@@ -52,6 +54,7 @@ const entities = [
   GithubPRReview,
   GithubConfiguration,
   GithubCommit,
+  PrAnalysis,
 ];
 
 @Module({
@@ -101,6 +104,8 @@ const entities = [
     GithubModule,
 
     AuthModule,
+
+    AiAnalysisModule,
   ],
   controllers: [AppController],
   providers: [AppService],
