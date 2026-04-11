@@ -9,6 +9,7 @@ import {
   Query,
   ParseIntPipe,
   DefaultValuePipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AiAnalysisService } from './ai-analysis.service';
@@ -30,8 +31,13 @@ export class AiAnalysisController {
     @Body() dto: TriggerBatchAnalysisDto,
     @Request() req: any,
   ) {
+    if (dto.githubPullRequestIds.length > 20) {
+      throw new BadRequestException('Batch limit is 20 PRs per request');
+    }
     const results: { prId: string; status: string; analysis?: any; error?: string }[] = [];
-    for (const prId of dto.githubPullRequestIds) {
+    const ids = dto.githubPullRequestIds;
+    for (let i = 0; i < ids.length; i++) {
+      const prId = ids[i];
       try {
         const analysis = await this.aiAnalysisService.triggerAnalysis(
           prId,
@@ -41,8 +47,15 @@ export class AiAnalysisController {
       } catch (error) {
         results.push({ prId, status: 'error', error: error.message });
       }
+      if (i < ids.length - 1) {
+        await this.sleep(2000);
+      }
     }
     return results;
+  }
+
+  private sleep(ms: number) {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   @Get('pr/:prId')
