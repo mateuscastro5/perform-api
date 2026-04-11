@@ -23,7 +23,7 @@ export class PrAnalysis {
   @JoinColumn({ name: 'github_pull_request_id' })
   githubPullRequest: GithubPullRequest;
 
-  @Column({ name: 'developer_id', nullable: true })
+  @Column({ name: 'developer_id', type: 'uuid', nullable: true })
   developerId: string | null;
 
   @ManyToOne(() => Developer, { nullable: true, onDelete: 'SET NULL' })
@@ -59,10 +59,10 @@ export class PrAnalysis {
   @Column({ name: 'corrected_score', type: 'float', nullable: true })
   correctedScore: number | null;
 
-  @Column({ name: 'corrected_label', nullable: true })
+  @Column({ name: 'corrected_label', type: 'varchar', nullable: true })
   correctedLabel: string | null;
 
-  @Column({ name: 'corrected_by', nullable: true })
+  @Column({ name: 'corrected_by', type: 'uuid', nullable: true })
   correctedBy: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
