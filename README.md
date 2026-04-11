@@ -1,247 +1,181 @@
-# 📊 Perform API
+# perform-api
 
-Backend da aplicação **Perform** - Sistema de análise de métricas técnicas de desenvolvedores e suporte à tomada de decisão de Tech Leads.
+Backend da plataforma **Perform** — sistema de análise de performance técnica de desenvolvedores para Tech Leads.
 
-## 🎯 Sobre o Projeto
+Construído com **NestJS + TypeORM + PostgreSQL (Neon)**. Integra-se ao GitHub via API/webhooks para coletar PRs e commits, e se comunica com o `perform-ai` para análise de complexidade por IA.
 
-O Perform é uma plataforma que captura dados do GitHub via webhooks e os transforma em insights acionáveis para Tech Leads. A aplicação:
+---
 
-- 📈 Coleta métricas de PRs, commits e code reviews automaticamente
-- 🤖 Gera recomendações inteligentes com IA
-- 📊 Calcula métricas como lead time, cycle time e review time
-- 👥 Gerencia squads e acompanha performance individual
-- 🎮 Interface gamificada inspirada em dashboards de eSports
+## O que faz
 
-## 🚀 Tecnologias
+- Sincroniza PRs, commits e code reviews do GitHub automaticamente
+- Orquestra análises de complexidade de código via `perform-ai` (Dual-LLM + RAG)
+- Calcula métricas temporais por desenvolvedor: lead time, cycle time, review time
+- Expõe insights de evolução de performance por desenvolvedor (scores, tendências, pontos fortes)
+- Gerencia squads, usuários e permissões
+- Autenticação JWT com roles (`ADMIN`, `TECH_LEAD`, `DEVELOPER`)
 
-- **[NestJS](https://nestjs.com/)** - Framework Node.js progressivo
-- **[TypeORM](https://typeorm.io/)** - ORM para TypeScript
-- **[PostgreSQL](https://www.postgresql.org/)** - Banco de dados (NeonDB)
-- **[JWT](https://jwt.io/)** - Autenticação
-- **[Class Validator](https://github.com/typestack/class-validator)** - Validação de DTOs
+---
 
-## 📋 Pré-requisitos
+## Tecnologias
 
-- Node.js 18+ 
-- npm ou yarn
-- PostgreSQL (ou acesso ao NeonDB)
+- **NestJS** — framework Node.js
+- **TypeORM** — ORM TypeScript
+- **PostgreSQL via NeonDB** — banco de dados serverless (SA-East-1)
+- **JWT** — autenticação
+- **Axios** — comunicação com `perform-ai` e GitHub API
 
-## 🔧 Instalação
+---
+
+## Pré-requisitos
+
+- Node.js 20+
+- Acesso ao banco NeonDB (ou PostgreSQL local)
+- `perform-ai` rodando (ou via Docker Compose)
+
+---
+
+## Setup
 
 ```bash
-# Clone o repositório
-git clone <repo-url>
-cd perform-api
-
-# Instale as dependências
 npm install
-
-# Configure as variáveis de ambiente
 cp .env.example .env
-# Edite o arquivo .env com suas credenciais
+# Edite o .env com as credenciais
+npm run start:dev
 ```
 
-## ⚙️ Configuração
-
-Edite o arquivo `.env` com suas configurações:
+### Variáveis de ambiente (.env)
 
 ```env
-# Database
-DATABASE_URL=postgresql://user:password@host:5432/database
+# Banco de dados
+DATABASE_URL=postgresql://user:password@host:5432/database?sslmode=require
 
-# Application
+# Aplicação
 NODE_ENV=development
 PORT=3000
 
 # JWT
-JWT_SECRET=your-secret-key-here
+JWT_SECRET=sua_chave_secreta
 JWT_EXPIRATION=7d
 
-# GitHub Webhook
-GITHUB_WEBHOOK_SECRET=your-webhook-secret
+# GitHub
+GITHUB_TOKEN=ghp_seu_token_aqui
+GITHUB_WEBHOOK_SECRET=seu_webhook_secret
+
+# Serviço de IA
+AI_SERVICE_URL=http://perform-ai:8000
+AI_SERVICE_API_KEY=perform_internal_key_2024
+
+# CORS
+CORS_ORIGIN=http://localhost:5173,http://localhost:3000
 ```
 
-## 🗄️ Banco de Dados
+---
 
-### Migrations
-
-```bash
-# Gerar nova migration baseada nas mudanças das entities
-npm run migration:generate -- src/database/migrations/MigrationName
-
-# Executar migrations pendentes
-npm run migration:run
-
-# Reverter última migration
-npm run migration:revert
-```
-
-## 🏃 Executando a Aplicação
+## Executando
 
 ```bash
-# Desenvolvimento (com hot reload)
+# Desenvolvimento (hot reload)
 npm run start:dev
 
 # Produção
-npm run build
-npm run start:prod
-
-# Debug
-npm run start:debug
+npm run build && npm run start:prod
 ```
 
-A API estará disponível em `http://localhost:3000`
+API disponível em `http://localhost:3000`
 
-## 🧪 Testes
+---
 
-```bash
-# Testes unitários
-npm run test
-
-# Testes e2e
-npm run test:e2e
-
-# Coverage
-npm run test:cov
-```
-
-## 📁 Estrutura do Projeto
+## Estrutura do projeto
 
 ```
 src/
-├── ai-recommendations/    # Recomendações de IA para developers
-├── auth/                  # Autenticação e autorização
-├── code-reviews/          # Gestão de code reviews
-├── commits/               # Gestão de commits
-├── database/              # Configuração do banco e migrations
-│   ├── data-source.ts    # DataSource do TypeORM
-│   └── migrations/       # Migrations SQL
-├── developers/            # Perfis técnicos dos developers
-├── github-webhook/        # Receptor de webhooks do GitHub
-├── metrics/               # Cálculo e armazenamento de métricas
-├── permissions/           # Sistema de permissões
-├── pull-requests/         # Gestão de Pull Requests
-├── reports/               # Geração de relatórios
-├── squads/                # Gestão de times/squads
-└── users/                 # Gestão de usuários do sistema
+├── ai-analysis/           # Análise de PRs via IA
+│   ├── entities/          # PrAnalysis, DeveloperEvolution
+│   ├── ai-analysis.service.ts    # Orquestra chamadas ao perform-ai
+│   └── ai-analysis.controller.ts # POST /ai-analysis/trigger, /trigger-batch
+├── auth/                  # JWT, login, registro
+├── developers/            # Perfis técnicos vinculados ao GitHub
+├── github/                # Integração GitHub API + webhooks
+│   ├── analytics/         # Métricas agregadas, PRs recentes, atividade
+│   └── webhook/           # Receptor de eventos push/PR/review
+├── squads/                # Times de desenvolvimento
+├── users/                 # Usuários do sistema (roles e permissões)
+└── database/              # DataSource TypeORM + migrations
 ```
 
-## 📊 Entidades Principais
+---
 
-### 👤 User
-Usuários do sistema com controle de acesso
-- Roles: `ADMIN`, `TECH_LEAD`, `DEVELOPER`
-- Autenticação JWT
-- Sistema de permissões granular
-
-### 👥 Squad
-Times de desenvolvimento
-- Tech Lead associado
-- Membros (Users e Developers)
-- Métricas agregadas por squad
-
-### 💻 Developer
-Perfil técnico vinculado ao GitHub
-- Dados sincronizados via webhook
-- Histórico de PRs, commits e reviews
-- Métricas individuais calculadas
-
-### 🔀 PullRequest
-Pull requests capturados do GitHub
-- Status: `OPEN`, `CLOSED`, `MERGED`
-- Estatísticas: linhas adicionadas/removidas, arquivos alterados
-- Lead time e review time
-
-### 📝 Commit
-Commits individuais
-- Vinculados a Developer e PullRequest (opcional)
-- Dados de complexidade e impacto
-
-### 👀 CodeReview
-Reviews de código
-- Status: `PENDING`, `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`
-- Tempo de resposta e qualidade do review
-
-### 📈 Metric
-Métricas calculadas
-- Lead time, cycle time, review time
-- Produtividade, qualidade de código
-- Armazenadas por período
-
-### 🤖 AIRecommendation
-Recomendações geradas por IA
-- Categorias: produtividade, qualidade, colaboração, aprendizado
-- Prioridades e score de confiança
-
-## 🔌 Endpoints Principais
+## Endpoints principais
 
 ### Autenticação
 ```
-POST   /auth/login          # Login
-POST   /auth/register       # Registro
+POST  /auth/login           # Login (retorna JWT)
+POST  /auth/register        # Criar conta
 ```
 
-### Usuários
+### Análise de IA
 ```
-GET    /users               # Listar usuários
-GET    /users/:id           # Buscar usuário
-POST   /users               # Criar usuário
-PATCH  /users/:id           # Atualizar usuário
-DELETE /users/:id           # Deletar usuário
-```
-
-### Developers
-```
-GET    /developers                    # Listar developers
-GET    /developers/:id                # Buscar developer
-GET    /developers/:id/metrics        # Métricas do developer
-GET    /developers/:id/pull-requests  # PRs do developer
+POST  /ai-analysis/trigger                    # Analisar uma PR específica
+POST  /ai-analysis/trigger-batch              # Analisar até 20 PRs (throttle 2s)
+GET   /ai-analysis/developer/:id              # Análises de um desenvolvedor
+GET   /ai-analysis/developer/:id/evolution    # Evolução temporal (trend, períodos)
+PATCH /ai-analysis/:id/feedback               # Corrigir label (Tech Lead)
 ```
 
-### GitHub Webhook
+### GitHub / Analytics
 ```
-POST   /github-webhook      # Receber eventos do GitHub
-```
-
-### Métricas
-```
-GET    /metrics                      # Listar métricas
-GET    /metrics/developer/:id        # Métricas por developer
-GET    /metrics/squad/:id            # Métricas por squad
+GET   /github/analytics/recent-pull-requests  # PRs recentes (com filtros)
+GET   /github/analytics/recent-activity       # Feed de atividades
+GET   /github/analytics/top-reviewers         # Melhores revisores
+GET   /github/analytics/metrics               # Métricas gerais
+POST  /github/webhook                         # Receber eventos do GitHub
 ```
 
-## 🪝 Configuração do GitHub Webhook
+### Squads e Desenvolvedores
+```
+GET   /squads                        # Listar squads
+GET   /github/developers             # Listar desenvolvedores com stats
+GET   /github/developers/:id         # Perfil de um desenvolvedor
+```
 
-1. Acesse as configurações do seu repositório no GitHub
-2. Vá em **Settings** → **Webhooks** → **Add webhook**
-3. Configure:
-   - **Payload URL**: `https://your-api.com/github-webhook`
-   - **Content type**: `application/json`
-   - **Secret**: (mesmo valor do `GITHUB_WEBHOOK_SECRET` no .env)
-   - **Events**: Selecione:
-     - `push` (commits)
-     - `pull_request` (PRs)
-     - `pull_request_review` (reviews)
+---
 
-## 📚 Documentação
+## Análise de IA (perform-ai integration)
 
-- [NestJS Documentation](https://docs.nestjs.com/)
-- [TypeORM Documentation](https://typeorm.io/)
-- [GitHub Webhooks](https://docs.github.com/en/developers/webhooks-and-events/webhooks)
-- [NeonDB Documentation](https://neon.tech/docs)
+O `perform-api` atua como orquestrador entre o frontend e o `perform-ai`:
 
-## 🤝 Contribuindo
+1. Frontend clica "Analyze code" na página do desenvolvedor
+2. `perform-api` recebe os IDs das PRs via `POST /ai-analysis/trigger-batch`
+3. Para cada PR, busca o diff no GitHub e envia para o `perform-ai`
+4. `perform-ai` retorna: `score`, `confidence`, `difficulty_label`, `justification`, `technologies`
+5. `perform-api` persiste o resultado e notifica via callback
+6. Frontend atualiza os insights do desenvolvedor em tempo real
 
-1. Fork o projeto
-2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
-3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
-4. Push para a branch (`git push origin feature/AmazingFeature`)
-5. Abra um Pull Request
+### Métricas de evolução temporal
 
-## 👥 Autores
+O endpoint `/ai-analysis/developer/:id/evolution` agrega análises por período e retorna:
+- `trend`: `improving` / `stable` / `declining`
+- `periods`: array de períodos com score médio e volume
+- `avgComplexity`, `avgConfidence`
 
-- **Mateus Silva de Castro Fagundes** - Desenvolvimento inicial
+---
 
-## 📝 Licença
+## Migrations
 
-Este projeto é proprietário e confidencial.
+```bash
+# Gerar nova migration
+npm run migration:generate -- src/database/migrations/NomeDaMigration
+
+# Executar migrations
+npm run migration:run
+
+# Reverter
+npm run migration:revert
+```
+
+---
+
+## Autores
+
+- **Mateus Silva de Castro Fagundes** — Desenvolvimento
