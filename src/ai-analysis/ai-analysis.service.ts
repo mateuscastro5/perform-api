@@ -1,3 +1,5 @@
+import * as http from 'http';
+import * as https from 'https';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -78,13 +80,11 @@ export class AiAnalysisService {
       `Sending PR #${pr.prNumber} to AI service for analysis...`,
     );
 
-    const response = await fetch(`${this.aiServiceUrl}/api/v1/analyze-pr`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': this.aiServiceApiKey,
-      },
-      body: JSON.stringify({
+    // Use http.request to avoid undici's 5-min headersTimeout (Ollama CPU = 10-20 min)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/analyze-pr`,
+      {
         pr_id: pr.id,
         title: pr.title,
         body: pr.body || '',
@@ -95,15 +95,8 @@ export class AiAnalysisService {
         additions: pr.additions,
         deletions: pr.deletions,
         changed_files: pr.changedFiles,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`AI service returned ${response.status}: ${error}`);
-    }
-
-    const result = await response.json();
+      },
+    );
 
     // 5. Save the analysis result
     const analysis = this.prAnalysisRepo.create({
@@ -268,22 +261,15 @@ export class AiAnalysisService {
 
     // Send feedback to FastAPI to update Qdrant
     try {
-      await fetch(`${this.aiServiceUrl}/api/v1/feedback`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': this.aiServiceApiKey,
-        },
-        body: JSON.stringify({
-          analysis_id: analysis.id,
-          pr_id: analysis.githubPullRequestId,
-          original_score: analysis.complexityScore,
-          corrected_score: dto.correctedScore,
-          corrected_label: dto.correctedLabel,
-          corrected_by: userId,
-          technical_summary: analysis.technicalSummary,
-          diff_snippet: '',
-        }),
+      await this.httpPost(`${this.aiServiceUrl}/api/v1/feedback`, {
+        analysis_id: analysis.id,
+        pr_id: analysis.githubPullRequestId,
+        original_score: analysis.complexityScore,
+        corrected_score: dto.correctedScore,
+        corrected_label: dto.correctedLabel,
+        corrected_by: userId,
+        technical_summary: analysis.technicalSummary,
+        diff_snippet: '',
       });
 
       this.logger.log(
@@ -304,6 +290,51 @@ export class AiAnalysisService {
       relations: ['githubPullRequest', 'developer'],
       order: { createdAt: 'DESC' },
       take: limit,
+    });
+  }
+
+  /**
+   * HTTP POST using Node's http/https module to avoid undici's 5-min headersTimeout.
+   * Ollama CPU inference can take 10-20 minutes, so we need no implicit timeout.
+   */
+  private httpPost(url: string, body: unknown): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const payload = JSON.stringify(body);
+      const options = {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-API-Key': this.aiServiceApiKey,
+        },
+      };
+
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const req = lib.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(
+              new Error(`AI service returned ${res.statusCode}: ${data}`),
+            );
+          } else {
+            try {
+              resolve(JSON.parse(data));
+            } catch {
+              reject(new Error(`Invalid JSON from AI service: ${data.slice(0, 200)}`));
+            }
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
     });
   }
 }
