@@ -455,4 +455,24 @@ export class GithubApiService {
 
     return response.text();
   }
+
+  async getCommitDiff(
+    token: string,
+    owner: string,
+    repo: string,
+    sha: string,
+  ): Promise<string> {
+    const url = `${this.baseUrl}/repos/${owner}/${repo}/commits/${sha}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3.diff',
+        'X-GitHub-Api-Version': this.apiVersion,
+      },
+    });
+    if (!response.ok) {
+      await this.handleError(response);
+    }
+    return response.text();
+  }
 }

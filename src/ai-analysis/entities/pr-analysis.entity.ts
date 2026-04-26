@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { GithubPullRequest } from '../../github/entities/github-pull-request.entity';
+import { GithubCommit } from '../../github/entities/github-commit.entity';
 import { Developer } from '../../developers/entities/developer.entity';
 import { User } from '../../users/entities/user.entity';
 
@@ -16,12 +17,19 @@ export class PrAnalysis {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'github_pull_request_id' })
-  githubPullRequestId: string;
+  @Column({ name: 'github_pull_request_id', type: 'uuid', nullable: true })
+  githubPullRequestId: string | null;
 
-  @ManyToOne(() => GithubPullRequest, { onDelete: 'CASCADE' })
+  @ManyToOne(() => GithubPullRequest, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'github_pull_request_id' })
-  githubPullRequest: GithubPullRequest;
+  githubPullRequest: GithubPullRequest | null;
+
+  @Column({ name: 'github_commit_id', type: 'uuid', nullable: true })
+  githubCommitId: string | null;
+
+  @ManyToOne(() => GithubCommit, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'github_commit_id' })
+  githubCommit: GithubCommit | null;
 
   @Column({ name: 'developer_id', type: 'uuid', nullable: true })
   developerId: string | null;

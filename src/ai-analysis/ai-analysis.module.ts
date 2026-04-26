@@ -7,6 +7,7 @@ import { PrAnalysis } from './entities/pr-analysis.entity';
 import { DeveloperInsightSnapshot } from './entities/developer-insight-snapshot.entity';
 import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
 import { GithubConfiguration } from '../github/entities/github-configuration.entity';
+import { GithubCommit } from '../github/entities/github-commit.entity';
 import { GithubModule } from '../github/github.module';
 
 @Module({
@@ -16,6 +17,7 @@ import { GithubModule } from '../github/github.module';
       DeveloperInsightSnapshot,
       GithubPullRequest,
       GithubConfiguration,
+      GithubCommit,
     ]),
     ConfigModule,
     GithubModule,

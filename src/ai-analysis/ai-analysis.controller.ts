@@ -12,11 +12,9 @@ import {
   ParseBoolPipe,
   DefaultValuePipe,
   BadRequestException,
-  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { UserRole } from '../users/entities/user.entity';
 import { AiAnalysisService } from './ai-analysis.service';
 import { TriggerBatchAnalysisDto } from './dto/trigger-analysis.dto';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
@@ -72,6 +70,61 @@ export class AiAnalysisController {
       if (i < ids.length - 1) await this.sleep(2000);
     }
     this.logger.log(`Background batch finished: ok=${ok} fail=${fail}`);
+  }
+
+  @Post('trigger-commit/:commitId')
+  async triggerCommitAnalysis(@Param('commitId') commitId: string, @Request() req: any) {
+    return this.aiAnalysisService.triggerCommitAnalysis(commitId, req.user.id);
+  }
+
+  @Post('trigger-commits-batch')
+  triggerCommitsBatch(
+    @Body() dto: { githubCommitIds: string[] },
+    @Request() req: any,
+  ) {
+    if (!Array.isArray(dto?.githubCommitIds)) {
+      throw new BadRequestException('githubCommitIds must be an array');
+    }
+    if (dto.githubCommitIds.length > 20) {
+      throw new BadRequestException('Batch limit is 20 commits per request');
+    }
+    const ids = [...dto.githubCommitIds];
+    const userId = req.user.id;
+
+    setImmediate(() => {
+      void this.runCommitsBatchInBackground(ids, userId);
+    });
+
+    return {
+      status: 'queued',
+      queued: ids.length,
+      message: 'Commit analyses started in background.',
+    };
+  }
+
+  private async runCommitsBatchInBackground(ids: string[], userId: string): Promise<void> {
+    this.logger.log(`Background commits batch started: ${ids.length} commits`);
+    let ok = 0;
+    let fail = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        await this.aiAnalysisService.triggerCommitAnalysis(ids[i], userId);
+        ok++;
+      } catch (error) {
+        fail++;
+        this.logger.warn(`Background commit analysis failed for ${ids[i]}: ${error.message}`);
+      }
+      if (i < ids.length - 1) await this.sleep(2000);
+    }
+    this.logger.log(`Background commits batch finished: ok=${ok} fail=${fail}`);
+  }
+
+  @Get('developer/:developerId/unanalyzed-commits')
+  async getUnanalyzedCommits(
+    @Param('developerId') developerId: string,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.aiAnalysisService.getUnanalyzedCommits(developerId, limit);
   }
 
   private sleep(ms: number) {
@@ -135,13 +188,8 @@ export class AiAnalysisController {
   @Delete('developer/:developerId/memory')
   async clearDeveloperMemory(
     @Param('developerId') developerId: string,
-    @Request() req: any,
+    @Request() _req: any,
   ) {
-    if (req.user?.role !== UserRole.ADMIN) {
-      throw new ForbiddenException(
-        'Only administrators can clear developer memory.',
-      );
-    }
     return this.aiAnalysisService.clearDeveloperMemory(developerId);
   }
 }

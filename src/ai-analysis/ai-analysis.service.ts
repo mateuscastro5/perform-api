@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { PrAnalysis } from './entities/pr-analysis.entity';
 import { DeveloperInsightSnapshot } from './entities/developer-insight-snapshot.entity';
 import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
+import { GithubCommit } from '../github/entities/github-commit.entity';
 import { GithubConfiguration } from '../github/entities/github-configuration.entity';
 import { GithubApiService } from '../github/github-api.service';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
@@ -39,6 +40,8 @@ export class AiAnalysisService {
     private readonly insightSnapshotRepo: Repository<DeveloperInsightSnapshot>,
     @InjectRepository(GithubPullRequest)
     private readonly githubPrRepo: Repository<GithubPullRequest>,
+    @InjectRepository(GithubCommit)
+    private readonly githubCommitRepo: Repository<GithubCommit>,
     @InjectRepository(GithubConfiguration)
     private readonly githubConfigRepo: Repository<GithubConfiguration>,
     private readonly githubApiService: GithubApiService,
@@ -156,6 +159,133 @@ export class AiAnalysisService {
     );
 
     return saved;
+  }
+
+  /**
+   * Analyze a single commit (for devs who push directly to main without PRs).
+   * Reuses the same /analyze-pr pipeline — the AI service treats the diff
+   * the same way regardless of whether it came from a PR or a commit.
+   */
+  async triggerCommitAnalysis(
+    githubCommitId: string,
+    _userId: string,
+    force = false,
+  ): Promise<PrAnalysis> {
+    if (!force) {
+      const existing = await this.prAnalysisRepo.findOne({
+        where: { githubCommitId },
+      });
+      if (existing) {
+        this.logger.log(
+          `Commit analysis already exists for ${githubCommitId} (id=${existing.id}). Returning cached.`,
+        );
+        return existing;
+      }
+    }
+
+    const commit = await this.githubCommitRepo.findOne({
+      where: { id: githubCommitId },
+      relations: ['repository'],
+    });
+    if (!commit) {
+      throw new NotFoundException(`GithubCommit ${githubCommitId} not found`);
+    }
+
+    const config = await this.githubConfigRepo
+      .createQueryBuilder('config')
+      .addSelect('config.githubToken')
+      .innerJoin('config.repositories', 'repo', 'repo.id = :repoId', {
+        repoId: commit.repositoryId,
+      })
+      .where('config.isActive = :active', { active: true })
+      .getOne();
+    if (!config) {
+      throw new NotFoundException(
+        `No active GitHub configuration found for repository ${commit.repositoryId}`,
+      );
+    }
+
+    const [owner, repo] = commit.repository.repoFullName.split('/');
+    this.logger.log(
+      `Fetching diff for commit ${commit.commitSha.substring(0, 7)} from ${commit.repository.repoFullName}`,
+    );
+    const diff = await this.githubApiService.getCommitDiff(
+      config.githubToken,
+      owner,
+      repo,
+      commit.commitSha,
+    );
+
+    // Build a synthetic PR-like payload so we can reuse /analyze-pr.
+    const firstLine = (commit.message || '').split('\n')[0].trim();
+    const title = firstLine || `commit ${commit.commitSha.substring(0, 7)}`;
+    const body = (commit.message || '').split('\n').slice(1).join('\n').trim();
+
+    this.logger.log(
+      `Sending commit ${commit.commitSha.substring(0, 7)} to AI service for analysis...`,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/analyze-pr`,
+      {
+        pr_id: commit.id,
+        title,
+        body,
+        diff,
+        author: commit.authorName,
+        repo_full_name: commit.repository.repoFullName,
+        pr_number: 0,
+        additions: commit.additions,
+        deletions: commit.deletions,
+        changed_files: commit.changedFiles,
+        developer_id: commit.developerId,
+      },
+    );
+
+    const analysis = this.prAnalysisRepo.create({
+      githubPullRequestId: null,
+      githubCommitId: commit.id,
+      developerId: commit.developerId,
+      complexityScore: result.score,
+      confidence: result.confidence,
+      difficultyLabel: result.difficulty_label,
+      justification: result.justification,
+      technicalSummary: result.technical_summary,
+      technologies: JSON.stringify(result.technologies),
+      changeType: result.change_type,
+      status: result.requires_review ? 'doubtful' : 'confirmed',
+      processingTimeMs: result.processing_time_ms,
+      llmReaderModel: 'openrouter/minimax-m2.5',
+      llmScorerModel: 'openrouter/minimax-m2.5',
+      similarExamplesUsed: JSON.stringify(result.similar_examples),
+    });
+
+    const saved = await this.prAnalysisRepo.save(analysis);
+    this.logger.log(
+      `Commit analysis saved for ${commit.commitSha.substring(0, 7)}: score=${result.score}`,
+    );
+    return saved;
+  }
+
+  /**
+   * Return commits for a developer that haven't been analyzed yet, most-recent first.
+   * Used by the Analyze-commits batch.
+   */
+  async getUnanalyzedCommits(
+    developerId: string,
+    limit = 20,
+  ): Promise<{ id: string; sha: string; message: string }[]> {
+    const rows = await this.githubCommitRepo
+      .createQueryBuilder('c')
+      .leftJoin('pr_analyses', 'a', 'a.github_commit_id = c.id')
+      .where('c.developer_id = :developerId', { developerId })
+      .andWhere('a.id IS NULL')
+      .orderBy('c.committed_date', 'DESC')
+      .limit(limit)
+      .getMany();
+
+    return rows.map((c) => ({ id: c.id, sha: c.commitSha, message: c.message }));
   }
 
   async getAnalysisByPrId(githubPrId: string): Promise<PrAnalysis | null> {
