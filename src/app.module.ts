@@ -36,6 +36,7 @@ import { GithubPRReview } from './github/entities/github-pr-review.entity';
 import { GithubConfiguration } from './github/entities/github-configuration.entity';
 import { GithubCommit } from './github/entities/github-commit.entity';
 import { PrAnalysis } from './ai-analysis/entities/pr-analysis.entity';
+import { DeveloperInsightSnapshot } from './ai-analysis/entities/developer-insight-snapshot.entity';
 
 const entities = [
   User,
@@ -55,6 +56,7 @@ const entities = [
   GithubConfiguration,
   GithubCommit,
   PrAnalysis,
+  DeveloperInsightSnapshot,
 ];
 
 @Module({

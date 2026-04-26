@@ -5,10 +5,26 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { PrAnalysis } from './entities/pr-analysis.entity';
+import { DeveloperInsightSnapshot } from './entities/developer-insight-snapshot.entity';
 import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
 import { GithubConfiguration } from '../github/entities/github-configuration.entity';
 import { GithubApiService } from '../github/github-api.service';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
+
+const INSIGHTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const INSIGHTS_INVALIDATE_AFTER_NEW_ANALYSES = 3;
+
+export interface DeveloperInsightsPayload {
+  developerId: string;
+  summary: string;
+  strengths: string[];
+  growthAreas: string[];
+  dominantTechnologies: string[];
+  trendNarrative: string;
+  memoryCount: number;
+  generatedAt: Date;
+  fromCache: boolean;
+}
 
 @Injectable()
 export class AiAnalysisService {
@@ -19,6 +35,8 @@ export class AiAnalysisService {
   constructor(
     @InjectRepository(PrAnalysis)
     private readonly prAnalysisRepo: Repository<PrAnalysis>,
+    @InjectRepository(DeveloperInsightSnapshot)
+    private readonly insightSnapshotRepo: Repository<DeveloperInsightSnapshot>,
     @InjectRepository(GithubPullRequest)
     private readonly githubPrRepo: Repository<GithubPullRequest>,
     @InjectRepository(GithubConfiguration)
@@ -35,7 +53,22 @@ export class AiAnalysisService {
   async triggerAnalysis(
     githubPrId: string,
     userId: string,
+    force = false,
   ): Promise<PrAnalysis> {
+    // 0. Idempotency: if an analysis already exists for this PR, return it
+    //    unless caller explicitly requested re-analysis with force=true.
+    if (!force) {
+      const existing = await this.prAnalysisRepo.findOne({
+        where: { githubPullRequestId: githubPrId },
+      });
+      if (existing) {
+        this.logger.log(
+          `Analysis already exists for PR ${githubPrId} (id=${existing.id}, score=${existing.complexityScore}). Returning cached.`,
+        );
+        return existing;
+      }
+    }
+
     // 1. Load the PR with its repository
     const pr = await this.githubPrRepo.findOne({
       where: { id: githubPrId },
@@ -80,7 +113,7 @@ export class AiAnalysisService {
       `Sending PR #${pr.prNumber} to AI service for analysis...`,
     );
 
-    // Use http.request to avoid undici's 5-min headersTimeout (Ollama CPU = 10-20 min)
+    // Use http.request to avoid undici's 5-min headersTimeout
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result: any = await this.httpPost(
       `${this.aiServiceUrl}/api/v1/analyze-pr`,
@@ -95,6 +128,7 @@ export class AiAnalysisService {
         additions: pr.additions,
         deletions: pr.deletions,
         changed_files: pr.changedFiles,
+        developer_id: pr.developerId,
       },
     );
 
@@ -111,8 +145,8 @@ export class AiAnalysisService {
       changeType: result.change_type,
       status: result.requires_review ? 'doubtful' : 'confirmed',
       processingTimeMs: result.processing_time_ms,
-      llmReaderModel: 'gemini-2.0-flash',
-      llmScorerModel: 'gemini-2.0-pro',
+      llmReaderModel: 'openrouter/minimax-m2.5',
+      llmScorerModel: 'openrouter/minimax-m2.5',
       similarExamplesUsed: JSON.stringify(result.similar_examples),
     });
 
@@ -293,6 +327,98 @@ export class AiAnalysisService {
     });
   }
 
+  async getDeveloperInsights(
+    developerId: string,
+    forceRefresh = false,
+  ): Promise<DeveloperInsightsPayload> {
+    const analysesCount = await this.prAnalysisRepo.count({
+      where: { developerId },
+    });
+
+    const cached = await this.insightSnapshotRepo.findOne({
+      where: { developerId },
+    });
+
+    if (!forceRefresh && cached) {
+      const ageMs = Date.now() - cached.generatedAt.getTime();
+      const newAnalyses = analysesCount - cached.analysesCountAtGeneration;
+      const fresh =
+        ageMs < INSIGHTS_CACHE_TTL_MS &&
+        newAnalyses < INSIGHTS_INVALIDATE_AFTER_NEW_ANALYSES;
+      if (fresh) {
+        this.logger.log(
+          `Insights cache HIT for developer ${developerId} (age=${Math.round(ageMs / 1000)}s, new_analyses=${newAnalyses})`,
+        );
+        return this.toPayload(cached, true);
+      }
+    }
+
+    this.logger.log(
+      `Insights cache MISS for developer ${developerId}, generating...`,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/insights/${developerId}`,
+      {},
+    );
+
+    const snapshot = cached ?? new DeveloperInsightSnapshot();
+    snapshot.developerId = developerId;
+    snapshot.summaryText = result.summary || '';
+    snapshot.strengths = Array.isArray(result.strengths) ? result.strengths : [];
+    snapshot.growthAreas = Array.isArray(result.growth_areas)
+      ? result.growth_areas
+      : [];
+    snapshot.dominantTechnologies = Array.isArray(result.dominant_technologies)
+      ? result.dominant_technologies
+      : [];
+    snapshot.trendNarrative = result.trend_narrative || '';
+    snapshot.memoryCountAtGeneration = result.memory_count || 0;
+    snapshot.analysesCountAtGeneration = analysesCount;
+    snapshot.generatedAt = new Date();
+
+    const saved = await this.insightSnapshotRepo.save(snapshot);
+    return this.toPayload(saved, false);
+  }
+
+  async clearDeveloperMemory(
+    developerId: string,
+  ): Promise<{ deletedMemories: number; clearedSnapshot: boolean }> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpDelete(
+      `${this.aiServiceUrl}/api/v1/memory/${developerId}`,
+    );
+
+    const deletion = await this.insightSnapshotRepo.delete({ developerId });
+
+    this.logger.log(
+      `Cleared memory for developer ${developerId}: ${result?.deleted_count ?? 0} memories, snapshot=${(deletion.affected ?? 0) > 0}`,
+    );
+
+    return {
+      deletedMemories: result?.deleted_count ?? 0,
+      clearedSnapshot: (deletion.affected ?? 0) > 0,
+    };
+  }
+
+  private toPayload(
+    snapshot: DeveloperInsightSnapshot,
+    fromCache: boolean,
+  ): DeveloperInsightsPayload {
+    return {
+      developerId: snapshot.developerId,
+      summary: snapshot.summaryText,
+      strengths: snapshot.strengths || [],
+      growthAreas: snapshot.growthAreas || [],
+      dominantTechnologies: snapshot.dominantTechnologies || [],
+      trendNarrative: snapshot.trendNarrative,
+      memoryCount: snapshot.memoryCountAtGeneration,
+      generatedAt: snapshot.generatedAt,
+      fromCache,
+    };
+  }
+
   /**
    * HTTP POST using Node's http/https module to avoid undici's 5-min headersTimeout.
    * Ollama CPU inference can take 10-20 minutes, so we need no implicit timeout.
@@ -334,6 +460,43 @@ export class AiAnalysisService {
 
       req.on('error', reject);
       req.write(payload);
+      req.end();
+    });
+  }
+
+  private httpDelete(url: string): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const options = {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'DELETE',
+        headers: {
+          'X-API-Key': this.aiServiceApiKey,
+        },
+      };
+
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const req = lib.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(
+              new Error(`AI service returned ${res.statusCode}: ${data}`),
+            );
+          } else {
+            try {
+              resolve(data ? JSON.parse(data) : {});
+            } catch {
+              reject(new Error(`Invalid JSON from AI service: ${data.slice(0, 200)}`));
+            }
+          }
+        });
+      });
+
+      req.on('error', reject);
       req.end();
     });
   }

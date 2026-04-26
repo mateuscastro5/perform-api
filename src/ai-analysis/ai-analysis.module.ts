@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AiAnalysisController } from './ai-analysis.controller';
 import { AiAnalysisService } from './ai-analysis.service';
 import { PrAnalysis } from './entities/pr-analysis.entity';
+import { DeveloperInsightSnapshot } from './entities/developer-insight-snapshot.entity';
 import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
 import { GithubConfiguration } from '../github/entities/github-configuration.entity';
 import { GithubModule } from '../github/github.module';
@@ -12,6 +13,7 @@ import { GithubModule } from '../github/github.module';
   imports: [
     TypeOrmModule.forFeature([
       PrAnalysis,
+      DeveloperInsightSnapshot,
       GithubPullRequest,
       GithubConfiguration,
     ]),

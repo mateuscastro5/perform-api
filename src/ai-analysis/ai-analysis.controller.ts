@@ -2,16 +2,20 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Param,
   Body,
   UseGuards,
   Request,
   Query,
   ParseIntPipe,
+  ParseBoolPipe,
   DefaultValuePipe,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { UserRole } from '../users/entities/user.entity';
 import { AiAnalysisService } from './ai-analysis.service';
 import { TriggerBatchAnalysisDto } from './dto/trigger-analysis.dto';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
@@ -101,5 +105,27 @@ export class AiAnalysisController {
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
   ) {
     return this.aiAnalysisService.getDoubtfulAnalyses(limit);
+  }
+
+  @Get('developer/:developerId/insights')
+  async getDeveloperInsights(
+    @Param('developerId') developerId: string,
+    @Query('refresh', new DefaultValuePipe(false), ParseBoolPipe)
+    refresh: boolean,
+  ) {
+    return this.aiAnalysisService.getDeveloperInsights(developerId, refresh);
+  }
+
+  @Delete('developer/:developerId/memory')
+  async clearDeveloperMemory(
+    @Param('developerId') developerId: string,
+    @Request() req: any,
+  ) {
+    if (req.user?.role !== UserRole.ADMIN) {
+      throw new ForbiddenException(
+        'Only administrators can clear developer memory.',
+      );
+    }
+    return this.aiAnalysisService.clearDeveloperMemory(developerId);
   }
 }
