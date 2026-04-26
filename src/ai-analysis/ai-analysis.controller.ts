@@ -13,6 +13,7 @@ import {
   DefaultValuePipe,
   BadRequestException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UserRole } from '../users/entities/user.entity';
@@ -23,6 +24,8 @@ import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
 @Controller('ai-analysis')
 @UseGuards(JwtAuthGuard)
 export class AiAnalysisController {
+  private readonly logger = new Logger(AiAnalysisController.name);
+
   constructor(private readonly aiAnalysisService: AiAnalysisService) {}
 
   @Post('trigger/:prId')
@@ -31,31 +34,44 @@ export class AiAnalysisController {
   }
 
   @Post('trigger-batch')
-  async triggerBatchAnalysis(
+  triggerBatchAnalysis(
     @Body() dto: TriggerBatchAnalysisDto,
     @Request() req: any,
   ) {
     if (dto.githubPullRequestIds.length > 20) {
       throw new BadRequestException('Batch limit is 20 PRs per request');
     }
-    const results: { prId: string; status: string; analysis?: any; error?: string }[] = [];
-    const ids = dto.githubPullRequestIds;
+    const ids = [...dto.githubPullRequestIds];
+    const userId = req.user.id;
+
+    // Fire-and-forget: kick off the batch in the background and respond
+    // immediately so the client doesn't block on the long-running pipeline.
+    setImmediate(() => {
+      void this.runBatchInBackground(ids, userId);
+    });
+
+    return {
+      status: 'queued',
+      queued: ids.length,
+      message: 'Analyses started in background. Poll /ai-analysis/developer/:id to track progress.',
+    };
+  }
+
+  private async runBatchInBackground(ids: string[], userId: string): Promise<void> {
+    this.logger.log(`Background batch started: ${ids.length} PRs for user ${userId}`);
+    let ok = 0;
+    let fail = 0;
     for (let i = 0; i < ids.length; i++) {
-      const prId = ids[i];
       try {
-        const analysis = await this.aiAnalysisService.triggerAnalysis(
-          prId,
-          req.user.id,
-        );
-        results.push({ prId, status: 'success', analysis });
+        await this.aiAnalysisService.triggerAnalysis(ids[i], userId);
+        ok++;
       } catch (error) {
-        results.push({ prId, status: 'error', error: error.message });
+        fail++;
+        this.logger.warn(`Background analysis failed for PR ${ids[i]}: ${error.message}`);
       }
-      if (i < ids.length - 1) {
-        await this.sleep(2000);
-      }
+      if (i < ids.length - 1) await this.sleep(2000);
     }
-    return results;
+    this.logger.log(`Background batch finished: ok=${ok} fail=${fail}`);
   }
 
   private sleep(ms: number) {
