@@ -107,6 +107,20 @@ export class GithubDataCollectorService {
       }
     }
 
+    // Stamp the wall-clock time of this collection run so the dashboard
+    // can render "synced N min ago". We touch even when 0 repos were
+    // processed — the user still attempted a sync.
+    try {
+      await this.githubConfigRepository.update(
+        { id: config.id },
+        { lastSyncedAt: new Date() },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to stamp lastSyncedAt for config ${config.id}: ${err}`,
+      );
+    }
+
     return summary;
   }
 
