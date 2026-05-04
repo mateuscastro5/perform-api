@@ -52,25 +52,28 @@ export class GithubAnalyticsService {
       },
     });
 
-    const lastWeekDate = new Date();
-    lastWeekDate.setDate(lastWeekDate.getDate() - 7);
+    // ── Time windows for week-over-week deltas ──
+    // Both windows are 7 days wide and DO NOT overlap, so the
+    // percentageChange below is a real comparison.
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const twoWeeksAgo = new Date();
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
 
     const commitsThisWeek = await this.githubCommitRepository.count({
       where: {
         repositoryId: In(repoIds),
-        committedDate: MoreThanOrEqual(lastWeekDate),
+        committedDate: MoreThanOrEqual(oneWeekAgo),
       },
     });
 
-    const twoWeeksAgoDate = new Date();
-    twoWeeksAgoDate.setDate(twoWeeksAgoDate.getDate() - 14);
-
-    const commitsLastWeek = await this.githubCommitRepository.count({
-      where: {
-        repositoryId: In(repoIds),
-        committedDate: MoreThanOrEqual(twoWeeksAgoDate),
-      },
-    });
+    // Previous week = [14 days ago, 7 days ago) — exclusive of "this week".
+    const commitsLastWeek = await this.githubCommitRepository
+      .createQueryBuilder('commit')
+      .where('commit.repository_id IN (:...repoIds)', { repoIds })
+      .andWhere('commit.committed_date >= :start', { start: twoWeeksAgo })
+      .andWhere('commit.committed_date < :end', { end: oneWeekAgo })
+      .getCount();
 
     const openPRs = await this.githubPRRepository.count({
       where: {
@@ -83,7 +86,7 @@ export class GithubAnalyticsService {
       where: {
         repositoryId: In(repoIds),
         state: 'closed',
-        mergedAt: MoreThanOrEqual(lastWeekDate),
+        mergedAt: MoreThanOrEqual(oneWeekAgo),
       },
     });
 
@@ -114,9 +117,29 @@ export class GithubAnalyticsService {
       .andWhere('review.state = :state', { state: 'CHANGES_REQUESTED' })
       .getCount();
 
+    // ── Awaiting review = open PRs WITHOUT any APPROVED review yet.
+    // GithubPullRequest doesn't expose a reverse relation to reviews so we
+    // use an EXISTS subquery instead of a JOIN.
+    const awaitingReview = await this.githubPRRepository
+      .createQueryBuilder('pr')
+      .where('pr.repository_id IN (:...repoIds)', { repoIds })
+      .andWhere('pr.state = :state', { state: 'open' })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM github_pr_reviews r
+          WHERE r.pull_request_id = pr.id
+            AND r.state = 'APPROVED'
+            AND r.deleted_at IS NULL
+        )`,
+      )
+      .getCount();
+
     const commitsPercentageChange =
       commitsLastWeek === 0
-        ? 100
+        ? commitsThisWeek > 0
+          ? 100
+          : 0
         : ((commitsThisWeek - commitsLastWeek) / commitsLastWeek) * 100;
 
     return {
@@ -131,13 +154,15 @@ export class GithubAnalyticsService {
         open: openPRs,
         closed: closedPRs,
         merged: mergedPRsThisWeek,
-        awaitingReview: openPRs,
+        awaitingReview,
       },
       reviews: {
         total: totalReviews,
         approved: approvedReviews,
         changesRequested: changesRequestedReviews,
-        pending: openPRs,
+        // Pending reviews ≈ PRs still waiting on someone to approve.
+        // Same source of truth as `awaitingReview`.
+        pending: awaitingReview,
       },
       period: {
         days,
@@ -163,7 +188,7 @@ export class GithubAnalyticsService {
     }
 
     const repoIds = repos.map((r) => r.id);
-    const weekDays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const today = new Date();
     const weeklyData: Array<{ day: string; commits: number; date: string }> =
       [];
