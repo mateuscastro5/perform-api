@@ -48,6 +48,14 @@ export class GithubConfiguration {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  /**
+   * Wall-clock timestamp of the last successful data collection for this
+   * configuration (manual or scheduled). Null when collection has never
+   * completed. Used by the dashboard to render "synced X min ago".
+   */
+  @Column({ name: 'last_synced_at', type: 'timestamptz', nullable: true })
+  lastSyncedAt: Date | null;
+
   @OneToMany(() => MonitoredRepository, (repo) => repo.configuration, {
     cascade: true,
   })
