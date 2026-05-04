@@ -176,12 +176,12 @@ export class GithubAnalyticsService {
       const nextDate = new Date(date);
       nextDate.setDate(nextDate.getDate() + 1);
 
-      const commits = await this.githubCommitRepository.count({
-        where: {
-          repositoryId: In(repoIds),
-          committedDate: MoreThanOrEqual(date),
-        },
-      });
+      const commits = await this.githubCommitRepository
+        .createQueryBuilder('commit')
+        .where('commit.repository_id IN (:...repoIds)', { repoIds })
+        .andWhere('commit.committed_date >= :startDate', { startDate: date })
+        .andWhere('commit.committed_date < :endDate', { endDate: nextDate })
+        .getCount();
 
       weeklyData.push({
         day: weekDays[date.getDay()],

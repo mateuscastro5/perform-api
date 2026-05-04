@@ -65,3 +65,5 @@ dist-electron/
 # Debug
 .pnp.*
 .yarn/
+.vercel
+.env*.local

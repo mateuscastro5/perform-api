@@ -1,0 +1,633 @@
+import * as http from 'http';
+import * as https from 'https';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Repository } from 'typeorm';
+import { PrAnalysis } from './entities/pr-analysis.entity';
+import { DeveloperInsightSnapshot } from './entities/developer-insight-snapshot.entity';
+import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
+import { GithubCommit } from '../github/entities/github-commit.entity';
+import { GithubConfiguration } from '../github/entities/github-configuration.entity';
+import { GithubApiService } from '../github/github-api.service';
+import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
+
+const INSIGHTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const INSIGHTS_INVALIDATE_AFTER_NEW_ANALYSES = 3;
+
+export interface DeveloperInsightsPayload {
+  developerId: string;
+  summary: string;
+  strengths: string[];
+  growthAreas: string[];
+  dominantTechnologies: string[];
+  trendNarrative: string;
+  memoryCount: number;
+  generatedAt: Date;
+  fromCache: boolean;
+}
+
+@Injectable()
+export class AiAnalysisService {
+  private readonly logger = new Logger(AiAnalysisService.name);
+  private readonly aiServiceUrl: string;
+  private readonly aiServiceApiKey: string;
+
+  constructor(
+    @InjectRepository(PrAnalysis)
+    private readonly prAnalysisRepo: Repository<PrAnalysis>,
+    @InjectRepository(DeveloperInsightSnapshot)
+    private readonly insightSnapshotRepo: Repository<DeveloperInsightSnapshot>,
+    @InjectRepository(GithubPullRequest)
+    private readonly githubPrRepo: Repository<GithubPullRequest>,
+    @InjectRepository(GithubCommit)
+    private readonly githubCommitRepo: Repository<GithubCommit>,
+    @InjectRepository(GithubConfiguration)
+    private readonly githubConfigRepo: Repository<GithubConfiguration>,
+    private readonly githubApiService: GithubApiService,
+    private readonly configService: ConfigService,
+  ) {
+    this.aiServiceUrl =
+      this.configService.get<string>('AI_SERVICE_URL') || 'http://localhost:8000';
+    this.aiServiceApiKey =
+      this.configService.get<string>('AI_SERVICE_API_KEY') || '';
+  }
+
+  async triggerAnalysis(
+    githubPrId: string,
+    userId: string,
+    force = false,
+  ): Promise<PrAnalysis> {
+    // 0. Idempotency: if an analysis already exists for this PR, return it
+    //    unless caller explicitly requested re-analysis with force=true.
+    if (!force) {
+      const existing = await this.prAnalysisRepo.findOne({
+        where: { githubPullRequestId: githubPrId },
+      });
+      if (existing) {
+        this.logger.log(
+          `Analysis already exists for PR ${githubPrId} (id=${existing.id}, score=${existing.complexityScore}). Returning cached.`,
+        );
+        return existing;
+      }
+    }
+
+    // 1. Load the PR with its repository
+    const pr = await this.githubPrRepo.findOne({
+      where: { id: githubPrId },
+      relations: ['repository'],
+    });
+
+    if (!pr) {
+      throw new NotFoundException(`GithubPullRequest ${githubPrId} not found`);
+    }
+
+    // 2. Find a GithubConfiguration with a token for this repository
+    const config = await this.githubConfigRepo
+      .createQueryBuilder('config')
+      .addSelect('config.githubToken')
+      .innerJoin('config.repositories', 'repo', 'repo.id = :repoId', {
+        repoId: pr.repositoryId,
+      })
+      .where('config.isActive = :active', { active: true })
+      .getOne();
+
+    if (!config) {
+      throw new NotFoundException(
+        `No active GitHub configuration found for repository ${pr.repositoryId}`,
+      );
+    }
+
+    // 3. Fetch the diff from GitHub
+    const [owner, repo] = pr.repository.repoFullName.split('/');
+    this.logger.log(
+      `Fetching diff for PR #${pr.prNumber} from ${pr.repository.repoFullName}`,
+    );
+
+    const diff = await this.githubApiService.getPullRequestDiff(
+      config.githubToken,
+      owner,
+      repo,
+      pr.prNumber,
+    );
+
+    // 4. Send to FastAPI for analysis
+    this.logger.log(
+      `Sending PR #${pr.prNumber} to AI service for analysis...`,
+    );
+
+    // Use http.request to avoid undici's 5-min headersTimeout
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/analyze-pr`,
+      {
+        pr_id: pr.id,
+        title: pr.title,
+        body: pr.body || '',
+        diff: diff,
+        author: pr.authorLogin,
+        repo_full_name: pr.repository.repoFullName,
+        pr_number: pr.prNumber,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changed_files: pr.changedFiles,
+        developer_id: pr.developerId,
+      },
+    );
+
+    // 5. Save the analysis result
+    const analysis = this.prAnalysisRepo.create({
+      githubPullRequestId: pr.id,
+      developerId: pr.developerId,
+      complexityScore: result.score,
+      confidence: result.confidence,
+      difficultyLabel: result.difficulty_label,
+      justification: result.justification,
+      technicalSummary: result.technical_summary,
+      technologies: JSON.stringify(result.technologies),
+      changeType: result.change_type,
+      status: result.requires_review ? 'doubtful' : 'confirmed',
+      processingTimeMs: result.processing_time_ms,
+      llmReaderModel: 'openrouter/minimax-m2.5',
+      llmScorerModel: 'openrouter/minimax-m2.5',
+      similarExamplesUsed: JSON.stringify(result.similar_examples),
+    });
+
+    const saved = await this.prAnalysisRepo.save(analysis);
+    this.logger.log(
+      `Analysis saved for PR #${pr.prNumber}: score=${result.score}, confidence=${result.confidence}, status=${saved.status}`,
+    );
+
+    return saved;
+  }
+
+  /**
+   * Analyze a single commit (for devs who push directly to main without PRs).
+   * Reuses the same /analyze-pr pipeline — the AI service treats the diff
+   * the same way regardless of whether it came from a PR or a commit.
+   */
+  async triggerCommitAnalysis(
+    githubCommitId: string,
+    _userId: string,
+    force = false,
+  ): Promise<PrAnalysis> {
+    if (!force) {
+      const existing = await this.prAnalysisRepo.findOne({
+        where: { githubCommitId },
+      });
+      if (existing) {
+        this.logger.log(
+          `Commit analysis already exists for ${githubCommitId} (id=${existing.id}). Returning cached.`,
+        );
+        return existing;
+      }
+    }
+
+    const commit = await this.githubCommitRepo.findOne({
+      where: { id: githubCommitId },
+      relations: ['repository'],
+    });
+    if (!commit) {
+      throw new NotFoundException(`GithubCommit ${githubCommitId} not found`);
+    }
+
+    const config = await this.githubConfigRepo
+      .createQueryBuilder('config')
+      .addSelect('config.githubToken')
+      .innerJoin('config.repositories', 'repo', 'repo.id = :repoId', {
+        repoId: commit.repositoryId,
+      })
+      .where('config.isActive = :active', { active: true })
+      .getOne();
+    if (!config) {
+      throw new NotFoundException(
+        `No active GitHub configuration found for repository ${commit.repositoryId}`,
+      );
+    }
+
+    const [owner, repo] = commit.repository.repoFullName.split('/');
+    this.logger.log(
+      `Fetching diff for commit ${commit.commitSha.substring(0, 7)} from ${commit.repository.repoFullName}`,
+    );
+    const diff = await this.githubApiService.getCommitDiff(
+      config.githubToken,
+      owner,
+      repo,
+      commit.commitSha,
+    );
+
+    // Build a synthetic PR-like payload so we can reuse /analyze-pr.
+    const firstLine = (commit.message || '').split('\n')[0].trim();
+    const title = firstLine || `commit ${commit.commitSha.substring(0, 7)}`;
+    const body = (commit.message || '').split('\n').slice(1).join('\n').trim();
+
+    this.logger.log(
+      `Sending commit ${commit.commitSha.substring(0, 7)} to AI service for analysis...`,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/analyze-pr`,
+      {
+        pr_id: commit.id,
+        title,
+        body,
+        diff,
+        author: commit.authorName,
+        repo_full_name: commit.repository.repoFullName,
+        pr_number: 0,
+        additions: commit.additions,
+        deletions: commit.deletions,
+        changed_files: commit.changedFiles,
+        developer_id: commit.developerId,
+      },
+    );
+
+    const analysis = this.prAnalysisRepo.create({
+      githubPullRequestId: null,
+      githubCommitId: commit.id,
+      developerId: commit.developerId,
+      complexityScore: result.score,
+      confidence: result.confidence,
+      difficultyLabel: result.difficulty_label,
+      justification: result.justification,
+      technicalSummary: result.technical_summary,
+      technologies: JSON.stringify(result.technologies),
+      changeType: result.change_type,
+      status: result.requires_review ? 'doubtful' : 'confirmed',
+      processingTimeMs: result.processing_time_ms,
+      llmReaderModel: 'openrouter/minimax-m2.5',
+      llmScorerModel: 'openrouter/minimax-m2.5',
+      similarExamplesUsed: JSON.stringify(result.similar_examples),
+    });
+
+    const saved = await this.prAnalysisRepo.save(analysis);
+    this.logger.log(
+      `Commit analysis saved for ${commit.commitSha.substring(0, 7)}: score=${result.score}`,
+    );
+    return saved;
+  }
+
+  /**
+   * Return commits for a developer that haven't been analyzed yet, most-recent first.
+   * Used by the Analyze-commits batch.
+   */
+  async getUnanalyzedCommits(
+    developerId: string,
+    limit = 20,
+  ): Promise<{ id: string; sha: string; message: string }[]> {
+    const rows = await this.githubCommitRepo
+      .createQueryBuilder('c')
+      .leftJoin('pr_analyses', 'a', 'a.github_commit_id = c.id')
+      .where('c.developer_id = :developerId', { developerId })
+      .andWhere('a.id IS NULL')
+      .orderBy('c.committed_date', 'DESC')
+      .limit(limit)
+      .getMany();
+
+    return rows.map((c) => ({ id: c.id, sha: c.commitSha, message: c.message }));
+  }
+
+  async getAnalysisByPrId(githubPrId: string): Promise<PrAnalysis | null> {
+    return this.prAnalysisRepo.findOne({
+      where: { githubPullRequestId: githubPrId },
+      relations: ['githubPullRequest', 'developer'],
+    });
+  }
+
+  async getAnalysesByDeveloper(
+    developerId: string,
+    limit = 50,
+  ): Promise<PrAnalysis[]> {
+    return this.prAnalysisRepo.find({
+      where: { developerId },
+      relations: ['githubPullRequest'],
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+  }
+
+  async getDeveloperEvolution(
+    developerId: string,
+    days = 90,
+  ): Promise<{
+    periods: { date: string; avgComplexity: number; prCount: number; maxComplexity: number }[];
+    trend: string;
+  }> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const analyses = await this.prAnalysisRepo
+      .createQueryBuilder('a')
+      .select("TO_CHAR(a.created_at, 'YYYY-MM-W')", 'period')
+      .addSelect('AVG(a.complexity_score)', 'avg_complexity')
+      .addSelect('COUNT(*)', 'pr_count')
+      .addSelect('MAX(a.complexity_score)', 'max_complexity')
+      .where('a.developer_id = :developerId', { developerId })
+      .andWhere('a.created_at >= :since', { since })
+      .groupBy('period')
+      .orderBy('period', 'ASC')
+      .getRawMany();
+
+    const periods = analyses.map((r) => ({
+      date: r.period,
+      avgComplexity: parseFloat(r.avg_complexity) || 0,
+      prCount: parseInt(r.pr_count) || 0,
+      maxComplexity: parseFloat(r.max_complexity) || 0,
+    }));
+
+    // Simple trend detection
+    let trend = 'stable';
+    if (periods.length >= 2) {
+      const first = periods[0].avgComplexity;
+      const last = periods[periods.length - 1].avgComplexity;
+      if (last > first * 1.15) trend = 'improving';
+      else if (last < first * 0.85) trend = 'declining';
+    }
+
+    return { periods, trend };
+  }
+
+  async getSquadReport(
+    squadId: string,
+    days = 30,
+  ): Promise<{
+    developers: {
+      id: string;
+      name: string;
+      avgComplexity: number;
+      prCount: number;
+      trend: string;
+    }[];
+    totalComplexityAbsorbed: number;
+    avgTeamComplexity: number;
+  }> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const results = await this.prAnalysisRepo
+      .createQueryBuilder('a')
+      .innerJoin('a.developer', 'd')
+      .select('d.id', 'developer_id')
+      .addSelect('d.name', 'developer_name')
+      .addSelect('AVG(a.complexity_score)', 'avg_complexity')
+      .addSelect('COUNT(*)', 'pr_count')
+      .addSelect('SUM(a.complexity_score)', 'total_complexity')
+      .where('d.squad_id = :squadId', { squadId })
+      .andWhere('a.created_at >= :since', { since })
+      .groupBy('d.id')
+      .addGroupBy('d.name')
+      .getRawMany();
+
+    const developers = results.map((r) => ({
+      id: r.developer_id,
+      name: r.developer_name || 'Unknown',
+      avgComplexity: parseFloat(r.avg_complexity) || 0,
+      prCount: parseInt(r.pr_count) || 0,
+      trend: 'stable',
+    }));
+
+    const totalComplexityAbsorbed = results.reduce(
+      (sum, r) => sum + (parseFloat(r.total_complexity) || 0),
+      0,
+    );
+    const avgTeamComplexity =
+      developers.length > 0
+        ? developers.reduce((sum, d) => sum + d.avgComplexity, 0) /
+          developers.length
+        : 0;
+
+    return { developers, totalComplexityAbsorbed, avgTeamComplexity };
+  }
+
+  async submitFeedback(
+    analysisId: string,
+    userId: string,
+    dto: SubmitFeedbackDto,
+  ): Promise<PrAnalysis> {
+    const analysis = await this.prAnalysisRepo.findOne({
+      where: { id: analysisId },
+    });
+
+    if (!analysis) {
+      throw new NotFoundException(`Analysis ${analysisId} not found`);
+    }
+
+    // Update the analysis record
+    analysis.correctedScore = dto.correctedScore;
+    analysis.correctedLabel = dto.correctedLabel;
+    analysis.correctedBy = userId;
+    analysis.correctedAt = new Date();
+    analysis.feedbackNote = dto.feedbackNote || null;
+    analysis.status = 'corrected';
+
+    const saved = await this.prAnalysisRepo.save(analysis);
+
+    // Send feedback to FastAPI to update Qdrant
+    try {
+      await this.httpPost(`${this.aiServiceUrl}/api/v1/feedback`, {
+        analysis_id: analysis.id,
+        pr_id: analysis.githubPullRequestId,
+        original_score: analysis.complexityScore,
+        corrected_score: dto.correctedScore,
+        corrected_label: dto.correctedLabel,
+        corrected_by: userId,
+        technical_summary: analysis.technicalSummary,
+        diff_snippet: '',
+      });
+
+      this.logger.log(
+        `Feedback sent to AI service for analysis ${analysisId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send feedback to AI service: ${error.message}`,
+      );
+    }
+
+    return saved;
+  }
+
+  async getDoubtfulAnalyses(limit = 50): Promise<PrAnalysis[]> {
+    return this.prAnalysisRepo.find({
+      where: { status: 'doubtful' },
+      relations: ['githubPullRequest', 'developer'],
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+  }
+
+  async getDeveloperInsights(
+    developerId: string,
+    forceRefresh = false,
+  ): Promise<DeveloperInsightsPayload> {
+    const analysesCount = await this.prAnalysisRepo.count({
+      where: { developerId },
+    });
+
+    const cached = await this.insightSnapshotRepo.findOne({
+      where: { developerId },
+    });
+
+    if (!forceRefresh && cached) {
+      const ageMs = Date.now() - cached.generatedAt.getTime();
+      const newAnalyses = analysesCount - cached.analysesCountAtGeneration;
+      const fresh =
+        ageMs < INSIGHTS_CACHE_TTL_MS &&
+        newAnalyses < INSIGHTS_INVALIDATE_AFTER_NEW_ANALYSES;
+      if (fresh) {
+        this.logger.log(
+          `Insights cache HIT for developer ${developerId} (age=${Math.round(ageMs / 1000)}s, new_analyses=${newAnalyses})`,
+        );
+        return this.toPayload(cached, true);
+      }
+    }
+
+    this.logger.log(
+      `Insights cache MISS for developer ${developerId}, generating...`,
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpPost(
+      `${this.aiServiceUrl}/api/v1/insights/${developerId}`,
+      {},
+    );
+
+    const snapshot = cached ?? new DeveloperInsightSnapshot();
+    snapshot.developerId = developerId;
+    snapshot.summaryText = result.summary || '';
+    snapshot.strengths = Array.isArray(result.strengths) ? result.strengths : [];
+    snapshot.growthAreas = Array.isArray(result.growth_areas)
+      ? result.growth_areas
+      : [];
+    snapshot.dominantTechnologies = Array.isArray(result.dominant_technologies)
+      ? result.dominant_technologies
+      : [];
+    snapshot.trendNarrative = result.trend_narrative || '';
+    snapshot.memoryCountAtGeneration = result.memory_count || 0;
+    snapshot.analysesCountAtGeneration = analysesCount;
+    snapshot.generatedAt = new Date();
+
+    const saved = await this.insightSnapshotRepo.save(snapshot);
+    return this.toPayload(saved, false);
+  }
+
+  async clearDeveloperMemory(
+    developerId: string,
+  ): Promise<{ deletedMemories: number; clearedSnapshot: boolean }> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await this.httpDelete(
+      `${this.aiServiceUrl}/api/v1/memory/${developerId}`,
+    );
+
+    const deletion = await this.insightSnapshotRepo.delete({ developerId });
+
+    this.logger.log(
+      `Cleared memory for developer ${developerId}: ${result?.deleted_count ?? 0} memories, snapshot=${(deletion.affected ?? 0) > 0}`,
+    );
+
+    return {
+      deletedMemories: result?.deleted_count ?? 0,
+      clearedSnapshot: (deletion.affected ?? 0) > 0,
+    };
+  }
+
+  private toPayload(
+    snapshot: DeveloperInsightSnapshot,
+    fromCache: boolean,
+  ): DeveloperInsightsPayload {
+    return {
+      developerId: snapshot.developerId,
+      summary: snapshot.summaryText,
+      strengths: snapshot.strengths || [],
+      growthAreas: snapshot.growthAreas || [],
+      dominantTechnologies: snapshot.dominantTechnologies || [],
+      trendNarrative: snapshot.trendNarrative,
+      memoryCount: snapshot.memoryCountAtGeneration,
+      generatedAt: snapshot.generatedAt,
+      fromCache,
+    };
+  }
+
+  /**
+   * HTTP POST using Node's http/https module to avoid undici's 5-min headersTimeout.
+   * Ollama CPU inference can take 10-20 minutes, so we need no implicit timeout.
+   */
+  private httpPost(url: string, body: unknown): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const payload = JSON.stringify(body);
+      const options = {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'X-API-Key': this.aiServiceApiKey,
+        },
+      };
+
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const req = lib.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(
+              new Error(`AI service returned ${res.statusCode}: ${data}`),
+            );
+          } else {
+            try {
+              resolve(JSON.parse(data));
+            } catch {
+              reject(new Error(`Invalid JSON from AI service: ${data.slice(0, 200)}`));
+            }
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  private httpDelete(url: string): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const options = {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'DELETE',
+        headers: {
+          'X-API-Key': this.aiServiceApiKey,
+        },
+      };
+
+      const lib = parsed.protocol === 'https:' ? https : http;
+      const req = lib.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(
+              new Error(`AI service returned ${res.statusCode}: ${data}`),
+            );
+          } else {
+            try {
+              resolve(data ? JSON.parse(data) : {});
+            } catch {
+              reject(new Error(`Invalid JSON from AI service: ${data.slice(0, 200)}`));
+            }
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.end();
+    });
+  }
+}

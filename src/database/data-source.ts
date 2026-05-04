@@ -11,11 +11,11 @@ import { CodeReview } from '../code-reviews/entities/code-review.entity';
 import { Metric } from '../metrics/entities/metric.entity';
 import { Report } from '../reports/entities/report.entity';
 import { Permission } from '../permissions/entities/permission.entity';
-import { AiRecommendation } from '../ai-recommendations/entities/ai-recommendation.entity';
+import { AIRecommendation } from '../ai-recommendations/entities/ai-recommendation.entity';
 import { GithubWebhook } from '../github-webhook/entities/github-webhook.entity';
 import { MonitoredRepository } from '../github/entities/monitored-repository.entity';
 import { GithubPullRequest } from '../github/entities/github-pull-request.entity';
-import { GithubPrReview } from '../github/entities/github-pr-review.entity';
+import { GithubPRReview } from '../github/entities/github-pr-review.entity';
 import { GithubConfiguration } from '../github/entities/github-configuration.entity';
 import { GithubCommit } from '../github/entities/github-commit.entity';
 
@@ -34,11 +34,11 @@ export const dataSourceOptions: DataSourceOptions = {
     Metric,
     Report,
     Permission,
-    AiRecommendation,
+    AIRecommendation,
     GithubWebhook,
     MonitoredRepository,
     GithubPullRequest,
-    GithubPrReview,
+    GithubPRReview,
     GithubConfiguration,
     GithubCommit,
   ],

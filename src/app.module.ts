@@ -17,6 +17,7 @@ import { AiRecommendationsModule } from './ai-recommendations/ai-recommendations
 import { GithubWebhookModule } from './github-webhook/github-webhook.module';
 import { GithubModule } from './github/github.module';
 import { AuthModule } from './auth/auth.module';
+import { AiAnalysisModule } from './ai-analysis/ai-analysis.module';
 
 import { User } from './users/entities/user.entity';
 import { Squad } from './squads/entities/squad.entity';
@@ -27,13 +28,15 @@ import { CodeReview } from './code-reviews/entities/code-review.entity';
 import { Metric } from './metrics/entities/metric.entity';
 import { Report } from './reports/entities/report.entity';
 import { Permission } from './permissions/entities/permission.entity';
-import { AiRecommendation } from './ai-recommendations/entities/ai-recommendation.entity';
+import { AIRecommendation } from './ai-recommendations/entities/ai-recommendation.entity';
 import { GithubWebhook } from './github-webhook/entities/github-webhook.entity';
 import { MonitoredRepository } from './github/entities/monitored-repository.entity';
 import { GithubPullRequest } from './github/entities/github-pull-request.entity';
-import { GithubPrReview } from './github/entities/github-pr-review.entity';
+import { GithubPRReview } from './github/entities/github-pr-review.entity';
 import { GithubConfiguration } from './github/entities/github-configuration.entity';
 import { GithubCommit } from './github/entities/github-commit.entity';
+import { PrAnalysis } from './ai-analysis/entities/pr-analysis.entity';
+import { DeveloperInsightSnapshot } from './ai-analysis/entities/developer-insight-snapshot.entity';
 
 const entities = [
   User,
@@ -45,13 +48,15 @@ const entities = [
   Metric,
   Report,
   Permission,
-  AiRecommendation,
+  AIRecommendation,
   GithubWebhook,
   MonitoredRepository,
   GithubPullRequest,
-  GithubPrReview,
+  GithubPRReview,
   GithubConfiguration,
   GithubCommit,
+  PrAnalysis,
+  DeveloperInsightSnapshot,
 ];
 
 @Module({
@@ -101,6 +106,8 @@ const entities = [
     GithubModule,
 
     AuthModule,
+
+    AiAnalysisModule,
   ],
   controllers: [AppController],
   providers: [AppService],

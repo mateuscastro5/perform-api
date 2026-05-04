@@ -432,4 +432,47 @@ export class GithubApiService {
       }>
     >(`/repos/${owner}/${repo}/issues?${params.toString()}`, token);
   }
+
+  async getPullRequestDiff(
+    token: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+  ): Promise<string> {
+    const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls/${pullNumber}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3.diff',
+        'X-GitHub-Api-Version': this.apiVersion,
+      },
+    });
+
+    if (!response.ok) {
+      await this.handleError(response);
+    }
+
+    return response.text();
+  }
+
+  async getCommitDiff(
+    token: string,
+    owner: string,
+    repo: string,
+    sha: string,
+  ): Promise<string> {
+    const url = `${this.baseUrl}/repos/${owner}/${repo}/commits/${sha}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3.diff',
+        'X-GitHub-Api-Version': this.apiVersion,
+      },
+    });
+    if (!response.ok) {
+      await this.handleError(response);
+    }
+    return response.text();
+  }
 }

@@ -67,13 +67,28 @@ export class GithubController {
     return this.githubService.disconnect(req.user.id);
   }
 
+  @Post('cleanup-developers')
+  @HttpCode(HttpStatus.OK)
+  async cleanupDevelopers() {
+    const result =
+      await this.githubDataCollectorService.mergeAndCleanupDevelopers();
+    return {
+      success: true,
+      message: `Merged ${result.merged} duplicates, deleted ${result.deleted} seed records`,
+      ...result,
+    };
+  }
+
   @Post('collect-data')
   @HttpCode(HttpStatus.OK)
   async collectData(@Request() req: any) {
-    await this.githubDataCollectorService.forceCollectForUser(req.user.id);
+    const summary = await this.githubDataCollectorService.forceCollectForUser(
+      req.user.id,
+    );
     return {
       success: true,
-      message: 'Data collection started successfully',
+      message: 'Data collection completed successfully',
+      summary,
     };
   }
 

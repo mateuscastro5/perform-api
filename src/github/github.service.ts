@@ -34,6 +34,9 @@ export class GithubService {
       connected: true,
       githubUsername: config.githubUsername,
       dataRange: config.dataRange,
+      lastSyncedAt: config.lastSyncedAt
+        ? config.lastSyncedAt.toISOString()
+        : null,
       repositories: config.repositories.map((repo) => ({
         id: repo.repoId,
         name: repo.repoName,
